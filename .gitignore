@@ -2,5 +2,3 @@
 *.log
 target/
 .idea/
-*.class
-*.log
