@@ -1,19 +1,22 @@
 package qnt
 
+import java.io.{File, FileWriter}
 import java.net.{HttpURLConnection, URL}
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
+import java.util.Scanner
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.{DefaultScalaModule, ScalaObjectMapper}
+import org.saddle.index.OuterJoin
 import org.saddle.{Frame, Index, Mat}
 import org.slf4j.LoggerFactory
 import ucar.nc2.NetcdfFile
 
 import scala.collection.JavaConversions._
-import scala.collection.immutable.{Map => ImmutableMap}
+import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 import scala.util.control.NonFatal
-
-
 
 object data {
   case class StockInfo (
@@ -23,11 +26,15 @@ object data {
                          symbol: String,
                          name: String,
                          sector: Option[String],
-                         props: ImmutableMap[String, Any]
+                         props: Map[String, Any]
                        ) {
 
     def this(props: Map[String, Any]) = this(
-      props("id").asInstanceOf[String],
+      getClientId(
+        props("id").asInstanceOf[String],
+        props("exchange").asInstanceOf[String],
+        props("symbol").asInstanceOf[String]
+      ),
       //props("FIGI").asInstanceOf[String],
       props.get("cik") match {
         case Some(s) => {
@@ -72,38 +79,96 @@ object data {
       return List.empty
     }
     val lst = OBJECT_MAPPER.readValue[List[Map[String, Any]]](dataBytes)
-    lst.map(p => new StockInfo(p))
+    lst.sortBy(i => i.getOrElse("last_point_id", "1900-01-01").asInstanceOf[String])
+      .reverse
+      .map(p => new StockInfo(p))
+      .sortBy(i => i.id)
   }
 
   def loadStockDailySeries(
-                            ids: List[String],
+    ids: Seq[String],
+    minDate: LocalDate = LocalDate.of(2007, 1, 1),
+    maxDate: LocalDate = LocalDate.now()
+  ) : Map[String, Frame[LocalDate, String, Double]] = {
+    var series = loadStockDailyOriginSeries(ids, minDate, maxDate)
+    // fix series by splits
+    series = series.entrySet().map(e => e.getKey match {
+      case Fields.vol => (e.getKey, e.getValue / series(Fields.split_cumprod))
+      case Fields.open | Fields.low | Fields.high | Fields.close | Fields.divs
+        => (e.getKey, e.getValue * series(Fields.split_cumprod))
+      case _ => (e.getKey, e.getValue)
+    }).toMap
+    Runtime.getRuntime.gc()
+    series
+  }
+
+  def loadStockDailyOriginSeries(
+                            ids: Seq[String],
                             minDate: LocalDate = LocalDate.of(2007, 1, 1),
                             maxDate: LocalDate = LocalDate.now()
                           ) : Map[String, Frame[LocalDate, String, Double]] = {
-    var uri = "data"
-    var params = Map(
-      "assets" -> ids,
-      "min_date" -> minDate.toString,
-      "max_date" -> maxDate.toString
-    )
-    val dataBytes = loadWithRetry(uri, params)
-    netcdfBytesToFrame(dataBytes)
+    val serverIds = ids.map(getServerId).sorted
+
+    var result = loadStockDailyRawSeries(serverIds, minDate, maxDate)
+
+    val clientIds = result(Fields.close).colIx.map(i => getClientId(i))
+    val sortedClientIds = clientIds.toVec.contents.sorted
+    val timeList = result(Fields.close).rowIx.toVec.contents.sorted
+    result = result.entrySet()
+      .map(e => (e.getKey, e.getValue.setColIndex(clientIds).apply(timeList, sortedClientIds)))
+      .toMap
+
+    Runtime.getRuntime.gc()
+
+    result
   }
 
   def loadIndexList() = ???
 
   def loadIndexSeries() = ???
 
-
+  implicit private val localDateOrdering: Ordering[LocalDate] = Ordering.by(_.toEpochDay)
   private val LOG = LoggerFactory.getLogger(getClass)
   private val RETRIES = 5
   private val TIMEOUT = 60*1000
   private val OBJECT_MAPPER = new ObjectMapper() with ScalaObjectMapper
+  private val BATCH_LIMIT = 300000
 
   OBJECT_MAPPER.registerModule(DefaultScalaModule)
 
-  private def loadStockDailySeriesOriginChunk(
-                                               ids: List[String],
+  def loadStockDailyRawSeries(
+                                  ids: Seq[String],
+                                  minDate: LocalDate = LocalDate.of(2007, 1, 1),
+                                  maxDate: LocalDate = LocalDate.now()
+                                ) : Map[String, Frame[LocalDate, String, Double]] = {
+    var days = math.max(1, ChronoUnit.DAYS.between(minDate, maxDate).asInstanceOf[Int])
+    var maxChunkSize = BATCH_LIMIT / days
+
+    var offset = 0
+    val chunks = ListBuffer[Map[String, Frame[LocalDate, String, Double]]]()
+    while (offset < ids.length) {
+      val size = math.min(maxChunkSize, ids.length - offset)
+      LOG.info(s"Load chunk offset: offset=$offset size=$size length=${ids.length} maxChunkSize=$maxChunkSize")
+      val chunkIds = ids.slice(offset, offset + size)
+      val chunk = loadStockDailyRawChunk(chunkIds, minDate, maxDate)
+      chunks += chunk
+      offset += size
+    }
+    mergeStockDailyRawChunks(chunks)
+  }
+
+  private def mergeStockDailyRawChunks(chunks: Seq[Map[String, Frame[LocalDate, String, Double]]])
+    :Map[String, Frame[LocalDate, String, Double]] = {
+    var result = Map[String, Frame[LocalDate, String, Double]]()
+    for(field <- Fields.values) {
+      var frame = chunks.map(c => c(field)).reduce((f1, f2)=>f1.joinPreserveColIx(f2, OuterJoin))
+      result  += (field -> frame)
+    }
+    result
+  }
+
+  private def loadStockDailyRawChunk(
+                                               ids: Seq[String],
                                                minDate: LocalDate = LocalDate.of(2007, 1, 1),
                                                maxDate: LocalDate = LocalDate.now()
                                              ) : Map[String, Frame[LocalDate, String, Double]] = {
@@ -139,10 +204,11 @@ object data {
     // C-order of dimensions: field,time,asset
     val values = dataNetcdf.readSection("__xarray_dataarray_variable__").copyTo1DJavaArray().asInstanceOf[Array[Double]]
 
-    implicit val localDateOrdering: Ordering[LocalDate] = Ordering.by(_.toEpochDay)
     val timeIdx = Index[LocalDate](timeArray)
     val assetIdx = Index[String](assetArray)
-    val valueMatrices = values.grouped(timeArray.length*assetArray.length).map(g => Mat(timeArray.length, assetArray.length, g)).toArray
+    val valueMatrices = values.grouped(timeArray.length*assetArray.length)
+      .map(g => Mat(timeArray.length, assetArray.length, g))
+      .toArray
 
     var result = Map[String, Frame[LocalDate, String, Double]]()
 
@@ -150,12 +216,8 @@ object data {
       val field = fieldArray(fi)
       val mat = valueMatrices(fi)
       val frame = Frame[LocalDate, String, Double](mat, timeIdx, assetIdx)
-      val frameForward = frame.row(timeIdx.reversed.toVec.contents.sorted)
-
-      result += (field -> frameForward)
+      result += (field -> frame)
     }
-
-    print(Fields.values)
     result
   }
 
@@ -201,6 +263,62 @@ object data {
   private def baseUrl = {
     System.getenv().getOrDefault("DATA_BASE_URL", "http://127.0.0.1:8000/")
   }
+
+  private val clientToServerIdMapping = mutable.HashMap[String,String]()
+  private val serverToClientIdMapping = mutable.HashMap[String,String]()
+  private val idMappingFile = new File("id-translation.csv")
+
+  if(idMappingFile.exists()) {
+    val scanner = new Scanner(idMappingFile)
+    var first = true
+    while(scanner.hasNext()) {
+      var line = scanner.nextLine()
+      if(first) {
+        first = false
+      } else {
+        line = line.strip()
+        if(line.length > 2) {
+          val parts = line.split(",")
+          val serverId = parts(0)
+          val clientId = parts(1)
+          clientToServerIdMapping(clientId) = serverId
+          serverToClientIdMapping(serverId) = clientId
+        }
+      }
+    }
+    scanner.close()
+  } else {
+    val writer = new FileWriter(idMappingFile)
+    writer.write("server_id,client_id\n")
+    writer.close()
+  }
+
+  private def getClientId(serverId: String, exchange: String = null, symbol: String = null): String = {
+    if(serverToClientIdMapping.contains(serverId)) {
+      serverToClientIdMapping(serverId)
+    } else {
+      if (exchange == null || symbol == null) {
+        serverId
+      } else {
+        val preferedId = s"$exchange:$symbol"
+        var clientId = preferedId
+        var num = 0
+        while (clientToServerIdMapping.contains(clientId)) {
+          num += 1
+          clientId = s"$preferedId~$num"
+        }
+        clientToServerIdMapping(clientId) = serverId
+        serverToClientIdMapping(serverId) = clientId
+        val writer = new FileWriter(idMappingFile)
+        writer.write(s"$serverId,$clientId\n")
+        writer.close()
+        clientId
+      }
+    }
+  }
+
+  private def getServerId(clientId: String)
+  : String = if(clientToServerIdMapping.contains(clientId)) clientToServerIdMapping(clientId) else clientId
 
 }
 

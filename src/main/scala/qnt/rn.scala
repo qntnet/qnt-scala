@@ -28,9 +28,26 @@ object Obj extends App {
     LocalDate.of(2019, 7, 7)
   )
 
-  val ids = lst.take(20).map(i => i.id)
+  var si : qndata.StockInfo = lst(0);
+
+  val ids = lst.map(i => i.id)
 
   val azaza = qndata.loadStockDailySeries(ids)
 
-  lst.filter(e => e.sector.isEmpty).foreach(println)
+  print("done")
+
+
+  // memory info
+  val mb = 1024*1024
+  val runtime = Runtime.getRuntime
+  //runtime.gc()
+  println("** Used Memory:  " + (runtime.totalMemory - runtime.freeMemory) / mb)
+  println("** Free Memory:  " + runtime.freeMemory / mb)
+  println("** Total Memory: " + runtime.totalMemory / mb)
+  println("** Max Memory:   " + runtime.maxMemory / mb)
+
+  //  lst.filter(e => e.sector.isEmpty).foreach(println)
+
+
+
 }
