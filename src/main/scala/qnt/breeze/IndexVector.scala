@@ -1,16 +1,16 @@
 package qnt.breeze
 
-import breeze.linalg.{SliceVector, Vector}
+import breeze.linalg.Vector
 
-import scala.collection.mutable
+import scala.collection.{IterableOnce, mutable}
 import scala.reflect.ClassTag
 
-class IndexVector[V]
-(
+class IndexVector[V] (
   private val data: Array[V],
+  val unique: Boolean,
   val ordered: Boolean,
   val reversed: Boolean,
-)(implicit ord: Ordering[V], tag: ClassTag[V]) extends IndexVectorLike[V]  {
+) (implicit ord: Ordering[V], tag: ClassTag[V]) extends IndexVectorLike[V]  {
 
   private val valueToIdxMap = new mutable.HashMap[V,Int]()
 
@@ -22,21 +22,21 @@ class IndexVector[V]
   }
   for (i <- data.indices) {
     var v = data(i)
-    if(valueToIdxMap.contains(v)) {
+    if(unique && valueToIdxMap.contains(v)) {
       throw new IllegalArgumentException(s"duplicate idx=$i val=$v")
     }
     valueToIdxMap(v) = i
   }
 
   override def copy: IndexVector[V] = {
-    IndexVector[V](toArray, ordered, reversed)
+    IndexVector[V](toArray, unique, ordered, reversed)
   }
 
   override def update(i: Int, v: V): Unit = {
     if (data(i) == v) {
       return
     }
-    if (data.contains(v)) {
+    if (unique && data.contains(v)) {
       throw new IllegalStateException(s"duplicate $i")
     }
     if (ordered) {
@@ -56,43 +56,48 @@ class IndexVector[V]
     valueToIdxMap.remove(data(i))
     data(i) = v
     valueToIdxMap(v) = i
-
-    SliceVector
   }
 
   override def length: Int = data.length
 
   override def apply(i: Int): V = data(i)
 
-  override def indexOfExact(v:V): Option[Int] = valueToIdxMap.get(v)
+  override def indexOfExact(v:V): Option[Int] =
+    if(unique) valueToIdxMap.get(v) else throw new IllegalStateException("not unique")
 
-  override def sliceSeq(idx: Iterator[Int]): SliceIndexVector[V] = new SliceIndexVector[V](this, idx.toIndexedSeq)
-
+  override def sliceIdx(idx: IterableOnce[Int]): SliceIndexVector[V] =
+    new SliceIndexVector[V](this, idx.iterator.toIndexedSeq)
 
 }
 
 object IndexVector {
 
-  def apply[V](data: Array[V], ordered: Boolean, reversed: Boolean)
+  def apply[V](data: IterableOnce[V], unique: Boolean, ordered: Boolean, reversed: Boolean)
               (implicit ord: Ordering[V], tag: ClassTag[V]) : IndexVector[V] = {
-    new IndexVector[V](data, ordered, reversed)(ord, tag)
+    new IndexVector[V](data.iterator.toArray, unique, ordered, reversed)(ord, tag)
   }
 
-  def apply[V](sliceVector: SliceVector[Int, V])
-              (implicit ord: Ordering[V], tag: ClassTag[V]) : IndexVector[V] = {
-    sliceVector.tensor match {
-      case t: IndexVector[V] =>
-        val values = sliceVector.toArray
-        apply(values, t.ordered, t.reversed)
-      case _ =>
-        throw new IllegalArgumentException("tensor of slice is not IndexVector")
-    }
+  def apply[V](data: IterableOnce[V])(implicit ord: Ordering[V], tag: ClassTag[V]) : IndexVector[V] = {
+    val arr = data.iterator.toArray
+    val unique = arr.distinct.length == arr.length
+    val ascending = arr.indices.forall(i => i == arr.indices.end || ord.lt(arr(i), arr(i+1)))
+    val descending = arr.indices.forall(i => i == arr.indices.end || ord.gt(arr(i), arr(i+1)))
+    apply(arr, unique, ascending || descending, descending)
   }
 
-  def apply[V](vector: Vector[V], ordered: Boolean, reversed: Boolean)
+  def apply[V](sliceVector: SliceIndexVector[V])
               (implicit ord: Ordering[V], tag: ClassTag[V]) : IndexVector[V] = {
-    val values = vector.toArray
-    apply(values, ordered, reversed)
+    val values = sliceVector.toArray
+    val t = sliceVector.indexVector
+    apply(values, t.unique, t.ordered, t.reversed)
   }
+
+  def apply[V](vector: Vector[V], unique: Boolean, ordered: Boolean, reversed: Boolean)
+              (implicit ord: Ordering[V], tag: ClassTag[V]) : IndexVector[V]
+    = apply(vector.valuesIterator, unique, ordered, reversed)
+
+  def apply[V](vector: Vector[V]) (implicit ord: Ordering[V], tag: ClassTag[V]) : IndexVector[V]
+    = apply(vector.valuesIterator)
+
 }
 

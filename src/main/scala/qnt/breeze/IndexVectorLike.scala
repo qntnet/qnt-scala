@@ -6,41 +6,37 @@ import scala.reflect.ClassTag
 
 trait IndexVectorLike[V] extends breeze.linalg.Vector[V] with VectorLike[V, IndexVectorLike[V]] {
 
-  // TODO unique ?
+  def unique: Boolean
   def ordered: Boolean
-
   def reversed: Boolean
 
   override def activeSize: Int = length
-
   override def activeIterator: Iterator[(Int, V)] = iterator
-
   override def activeValuesIterator: Iterator[V] = valuesIterator
-
   override def activeKeysIterator: Iterator[Int] = keysIterator
-
   override def repr: IndexVectorLike[V] = this
-
   override def toString: String = {
-    valuesIterator.mkString(s"IndexVector(ordered=$ordered, reversed=$reversed, data=[", ", ", "])")
+    valuesIterator.mkString(s"Index(unique=$unique,ordered=$ordered,reversed=$reversed,data=[", ", ", "])")
   }
 
   override def copy: IndexVector[V]
 
   def merge(other: IndexVectorLike[V])(implicit ord: Ordering[V], tag: ClassTag[V]): IndexVectorLike[V] = {
     var vals = Array.concat(toArray, other.toArray)
-    vals = vals.distinct
+    if(unique) {
+      vals = vals.distinct
+    }
     if (ordered) {
       vals = vals.sorted(ord)
       if (reversed) {
         vals = vals.reverse
       }
     }
-    IndexVector[V](vals, ordered, reversed)
+    IndexVector[V](vals, unique, ordered, reversed)
   }
 
   def indexOfUnexact(value: V)(implicit ord: Ordering[V]): Option[(Int, Int)] = {
-    var exact = indexOfExact(value)
+    var exact = if(unique) indexOfExact(value) else None
     if (exact.isDefined) {
       Some((exact.get, exact.get))
     } else {
@@ -50,27 +46,52 @@ trait IndexVectorLike[V] extends breeze.linalg.Vector[V] with VectorLike[V, Inde
 
   def indexOfExact(value: V): Option[Int]
 
+  // returns range of indexes
+  //   or index of first element that less and index of first element that great
+  //   or None
+  // TODO tests
   def indexOfBinarySearch(value: V)(implicit ord: Ordering[V]): Option[(Int, Int)] = {
-    if (!ordered) {
+    if (!ordered || length < 1) {
       return None
     }
 
-    var leftIdx = 0
-    var rightIdx = this.length - 1
+    var leftLeftIdx = 0
+    var rightRightIdx = this.length - 1
 
-    if (leftIdx > rightIdx) {
-      return None
+    var leftVal: V = apply(leftLeftIdx)
+    var rightVal: V = apply(rightRightIdx)
+
+    @inline
+    def findSameRightIdx(leftIdx: Int, leftVal: V) = {
+      var rightIdx = leftIdx
+      if (!unique) {
+        do rightIdx += 1
+        while (rightIdx < length && apply(rightIdx) == leftVal)
+        rightIdx -= 1
+      }
+      rightIdx
     }
 
-    var leftVal: V = apply(leftIdx)
-    var rightVal: V = apply(rightIdx)
+    @inline
+    def findSameLeftIdx(rightIdx: Int, rightVal: V) = {
+      var leftIdx = rightIdx
+      if (!unique) {
+        do leftIdx -= 1
+        while (rightIdx > 0 && apply(leftIdx) == rightVal)
+        leftIdx += 1
+      }
+      leftIdx
+    }
+
+    var leftRightIdx = findSameRightIdx(leftLeftIdx, leftVal)
+    var rightLeftIdx = findSameLeftIdx(rightRightIdx, rightVal)
 
     if (leftVal == value) {
-      return Some((leftIdx, leftIdx))
+      return Some((leftLeftIdx, leftRightIdx))
     }
 
     if (rightVal == value) {
-      return Some((rightIdx, rightIdx))
+      return Some((leftLeftIdx, rightLeftIdx))
     }
 
     if (ord.lt(rightVal, value) ^ reversed) {
@@ -81,58 +102,69 @@ trait IndexVectorLike[V] extends breeze.linalg.Vector[V] with VectorLike[V, Inde
       return None
     }
 
-    while (rightIdx - leftIdx > 1) {
-      val midIdx = (rightIdx + leftIdx) / 2
+    while (rightLeftIdx - leftRightIdx > 0) {
+      val midIdx = (rightLeftIdx + leftRightIdx) / 2
       val midVal = apply(midIdx)
+
+      var midLeftIdx = findSameLeftIdx(midIdx, midVal)
+      var midRightIdx = findSameRightIdx(midIdx, midVal)
+
       if (midVal == value) {
-        return Some((midIdx, midIdx))
+        return Some((midLeftIdx, midRightIdx))
       } else if (ord.lt(midVal, value) ^ reversed) {
-        leftIdx = midIdx
+        leftLeftIdx = midLeftIdx
+        leftRightIdx = midRightIdx
         leftVal = midVal
       } else if (ord.gt(midVal, value) ^ reversed) {
-        rightIdx = midIdx
+        rightRightIdx = midRightIdx
+        rightLeftIdx = midLeftIdx
         rightVal = midVal
       }
     }
-    Some((leftIdx, rightIdx))
+    Some((leftRightIdx, rightLeftIdx))
   }
 
   def sliceMask(mask: breeze.linalg.Vector[Boolean]): SliceIndexVector[V] = sliceMask(mask.valuesIterator)
-  def sliceMask(mask: Boolean*): SliceIndexVector[V] = sliceMask(mask.iterator)
-  def sliceMask(mask: Iterable[Boolean]): SliceIndexVector[V] = sliceMask(mask.iterator)
-  def sliceMask(mask: Iterator[Boolean]): SliceIndexVector[V] = sliceSeq(mask.zipWithIndex.filter(_._1).map(_._2))
+  def sliceMask(mask: Boolean*): SliceIndexVector[V] = sliceMask(mask)
+  def sliceMask(mask: IterableOnce[Boolean]): SliceIndexVector[V] =
+    sliceIdx(mask.iterator.zipWithIndex.filter(_._1).map(_._2))
 
-  def sliceSeq(idx: breeze.linalg.Vector[Int]): SliceIndexVector[V] = sliceSeq(idx.valuesIterator)
-  def sliceSeq(idx: Int*): SliceIndexVector[V] = sliceSeq(idx.iterator)
-  def sliceSeq(idx: Iterable[Int]): SliceIndexVector[V] = sliceSeq(idx.iterator)
-  def sliceSeq(idx: Iterator[Int]): SliceIndexVector[V]
+  def sliceIdx(idx: breeze.linalg.Vector[Int]): SliceIndexVector[V] = sliceIdx(idx.valuesIterator)
+  def sliceIdx(idx: Int*): SliceIndexVector[V] = sliceIdx(idx.iterator)
+  def sliceIdx(idx: IterableOnce[Int]): SliceIndexVector[V]
 
-  def sliceRange(start: Int, end: Int, step: Int, left: Boolean, right: Boolean, round: Boolean)
-    : SliceIndexVector[V] = sliceSeq(RoundArrayRange(length, start, end, step, left, right, round))
+  def sliceRange(start: Int, end: Int, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
+    : SliceIndexVector[V] = sliceIdx(RoundArrayRange(length, start, end, step, keepStart, keepEnd, round))
 
   def loc(v: V): Option[Int] = indexOfExact(v)
 
-  def sliceLoc(v: breeze.linalg.Vector[V]): SliceIndexVector[V] = sliceLoc(v.valuesIterator)
-  def sliceLoc(v: V*):SliceIndexVector[V] = sliceLoc(v.iterator)
-  def sliceLoc(v: Iterable[V]): SliceIndexVector[V] = sliceLoc(v.iterator)
-  def sliceLoc(v: Iterator[V]): SliceIndexVector[V] = {
-    var idxo = v.map(indexOfExact).filter(_.isDefined).map(_.get)
-    sliceSeq(idxo)
+  def sliceLoc(vals: breeze.linalg.Vector[V]): SliceIndexVector[V] = sliceLoc(vals.valuesIterator)
+  def sliceLoc(vals: V*):SliceIndexVector[V] = sliceLoc(vals.iterator)
+  def sliceLoc(vals: IterableOnce[V]): SliceIndexVector[V] = {
+    sliceIdx(vals.iterator.map(indexOfExact).filter(_.isDefined).map(_.get))
   }
 
   def sliceLocRange(start: V, end: V, step: Int = 1,
-                    left: Boolean = true, right: Boolean = true, round: Boolean = true)
+                    keepStart: Boolean = true, keepEnd: Boolean = true, round: Boolean = true)
                    (implicit ord: Ordering[V], tag: ClassTag[V]): SliceIndexVector[V] = {
       val startIdx = indexOfUnexact(start)(ord)
       val endIdx = indexOfUnexact(end)(ord)
       if(startIdx.isEmpty || endIdx.isEmpty) {
-        IndexVectorLike.empty[V].sliceSeq(Seq())
+        IndexVectorLike.empty[V].sliceIdx()
       } else {
         sliceRange(
-          if(step > 0) startIdx.get._2 else startIdx.get._1,
-          if(step > 0) endIdx.get._1 else endIdx.get._2,
+          if(step > 0)
+            if(!unique && keepStart && apply(startIdx.get._1) == start) startIdx.get._1 else startIdx.get._2
+          else
+            if(!unique && keepEnd && apply(startIdx.get._1) == start) startIdx.get._2 else startIdx.get._1
+          ,
+          if(step > 0)
+            if(!unique && keepEnd && apply(endIdx.get._1) == end) startIdx.get._2 else startIdx.get._1
+          else
+            if(!unique && keepStart && apply(endIdx.get._1) == end) startIdx.get._1 else startIdx.get._2
+          ,
           step,
-          left, right, round
+          keepStart, keepEnd, round
         )
       }
   }
@@ -140,5 +172,5 @@ trait IndexVectorLike[V] extends breeze.linalg.Vector[V] with VectorLike[V, Inde
 
 object IndexVectorLike {
   def empty[V](implicit ord: Ordering[V], tag: ClassTag[V])
-  = new IndexVector[V](Array[V](), true, false)(ord, tag)
+  = new IndexVector[V](Array.empty[V],  true,true, false)(ord, tag)
 }
