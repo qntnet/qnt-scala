@@ -3,36 +3,46 @@ package qnt.breeze
 import scala.reflect.ClassTag
 
 class SliceIndexVector[V](
-  val indexVector: IndexVector[V],
-  val slices: IndexedSeq[Int]
+                           val source: AbstractIndexVector[V],
+                           val slices: IndexedSeq[Int]
 ) (implicit ord: Ordering[V], tag: ClassTag[V])
-  extends IndexVectorLike[V] {
+  extends AbstractIndexVector[V] {
 
-  override val unique: Boolean = indexVector.unique && slices.distinct.length == slices.length
+  override val unique: Boolean = source.unique && slices.distinct.length == slices.length
 
-  override val ordered: Boolean = indexVector.ordered &&
-    (slices.indices.forall(i => i == slices.length - 1 || slices(i) < slices(i + 1))
-      || slices.indices.forall(i => i == slices.length - 1 || slices(i) > slices(i + 1)))
+  override val (ordered:Boolean, reversed:Boolean) =
+    if(!source.ordered) {
+      val ascending = slices.indices.forall(i => i == slices.length - 1 || slices(i) < slices(i + 1))
+      val descending = slices.indices.forall(i => i == slices.length - 1 || slices(i) > slices(i + 1))
+      (ascending || descending, source.reversed ^ descending)
+    } else {
+      (false, false)
+    }
 
-  override val reversed: Boolean = indexVector.reversed ^
-    slices.indices.forall(i => i == slices.indices.end || slices(i) > slices(i + 1))
-
-  private val tensorToLocalIdxMap = slices.zipWithIndex.toMap
+  private val sourceToLocalIdxMap = slices.zipWithIndex.toMap
 
   override def indexOfExact(value: V): Option[Int] = {
-    var origIdx = indexVector.indexOfExact(value)
-    if (origIdx.isEmpty) origIdx else tensorToLocalIdxMap.get(origIdx.get)
+    if(!unique) throw new IllegalStateException("not unique")
+    source.indexOfExact(value).map(sourceToLocalIdxMap)
   }
 
-  override def copy: IndexVector[V] = IndexVector(toArray, unique, ordered, reversed)
+  override def indexOfExactUnsafe(value: V): Int = sourceToLocalIdxMap(source.indexOfExactUnsafe(value))
 
   override def length: Int = slices.length
 
-  override def apply(i: Int): V = indexVector(slices(i))
+  override def apply(i: Int): V = source(slices(i))
 
-  override def update(i: Int, v: V): Unit = indexVector(slices(i))
+  override def update(i: Int, v: V): Unit = source(slices(i))
 
-  override def sliceIdx(idx: IterableOnce[Int]): SliceIndexVector[V]
-    = new SliceIndexVector[V](indexVector, idx.iterator.map(i => slices(i)).toIndexedSeq)
+  override def contains(v: V): Boolean
+  = if (unique) source.contains(v) && sourceToLocalIdxMap.contains(source.indexOfExactUnsafe(v))
+  else if (ordered) indexOfBinarySearch(v).foundValue
+  else valuesIterator.contains(v)
 
+}
+
+object SliceIndexVector {
+  def apply[V](indexVector: AbstractIndexVector[V], slices: IterableOnce[Int])
+              (implicit ord: Ordering[V], tag: ClassTag[V]): SliceIndexVector[V]
+    = new SliceIndexVector[V](indexVector, slices.iterator.toIndexedSeq)
 }
