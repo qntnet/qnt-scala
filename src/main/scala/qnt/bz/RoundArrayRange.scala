@@ -1,4 +1,4 @@
-package qnt.breeze
+package qnt.bz
 
 class RoundArrayRange(limit:Int, start:Int, step:Int, count:Int) extends IndexedSeq[Int]{
 

@@ -1,16 +1,16 @@
-package qnt.breeze
+package qnt.bz
 
 import breeze.linalg.Vector
 
 import scala.collection.{IterableOnce, mutable}
 import scala.reflect.ClassTag
 
-class IndexVector[V](
+class DataIndexVector[V](
                       private val data: Array[V],
                       val unique: Boolean,
                       val ordered: Boolean,
                       val reversed: Boolean,
-                    )(implicit ord: Ordering[V], tag: ClassTag[V]) extends AbstractIndexVector[V] {
+                    )(implicit ord: Ordering[V], tag: ClassTag[V]) extends IndexVector[V] {
 
   private val valueToIdxMap = new mutable.HashMap[V, Int]()
 
@@ -42,7 +42,7 @@ class IndexVector[V](
           throw new IllegalArgumentException(s"ordering violation (prev, cur) idx=$i")
         }
       }
-      if (i < length - 1) {
+      if (i < size - 1) {
         val nxt = apply(i + 1)
         if (ord.gt(v, nxt) ^ reversed) {
           throw new IllegalArgumentException(s"ordering violation (cur, nxt) idx=$i")
@@ -54,7 +54,7 @@ class IndexVector[V](
     valueToIdxMap(v) = i
   }
 
-  override def length: Int = data.length
+  override def size: Int = data.length
 
   override def apply(i: Int): V = data(i)
 
@@ -67,35 +67,36 @@ class IndexVector[V](
     if (unique) valueToIdxMap.get(v) else throw new IllegalStateException("not unique")
 
   override def indexOfExactUnsafe(value: V): Int = valueToIdxMap(value)
+
 }
 
-object IndexVector {
+object DataIndexVector {
 
   def apply[V](data: IterableOnce[V], unique: Boolean, ordered: Boolean, reversed: Boolean)
-              (implicit ord: Ordering[V], tag: ClassTag[V]): IndexVector[V] = {
-    new IndexVector[V](data.iterator.toArray, unique, ordered, reversed)(ord, tag)
+              (implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V] = {
+    new DataIndexVector[V](data.iterator.toArray, unique, ordered, reversed)(ord, tag)
   }
 
-  def apply[V](data: IterableOnce[V])(implicit ord: Ordering[V], tag: ClassTag[V]): IndexVector[V] = {
+  def apply[V](data: IterableOnce[V])(implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V] = {
     val arr = data.iterator.toArray
     val unique = arr.distinct.length == arr.length
-    val ascending = arr.indices.forall(i => i == arr.indices.end || ord.lt(arr(i), arr(i + 1)))
-    val descending = arr.indices.forall(i => i == arr.indices.end || ord.gt(arr(i), arr(i + 1)))
+    val ascending = arr.indices.take(arr.length-1).forall(i => ord.lt(arr(i), arr(i + 1)))
+    val descending = arr.indices.take(arr.length-1).forall(i => ord.gt(arr(i), arr(i + 1)))
     apply(arr, unique, ascending || descending, descending)
   }
 
   def apply[V](sliceVector: SliceIndexVector[V])
-              (implicit ord: Ordering[V], tag: ClassTag[V]): IndexVector[V] = {
+              (implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V] = {
     val values = sliceVector.toArray
     val t = sliceVector.source
     apply(values, t.unique, t.ordered, t.reversed)
   }
 
   def apply[V](vector: Vector[V], unique: Boolean, ordered: Boolean, reversed: Boolean)
-              (implicit ord: Ordering[V], tag: ClassTag[V]): IndexVector[V]
+              (implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V]
   = apply(vector.valuesIterator, unique, ordered, reversed)
 
-  def apply[V](vector: Vector[V])(implicit ord: Ordering[V], tag: ClassTag[V]): IndexVector[V]
+  def apply[V](vector: Vector[V])(implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V]
   = apply(vector.valuesIterator)
 
 }

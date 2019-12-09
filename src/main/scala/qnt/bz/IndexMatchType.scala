@@ -1,4 +1,4 @@
-package qnt.breeze
+package qnt.bz
 
 object IndexMatchType extends Enumeration{
   val prev = Value

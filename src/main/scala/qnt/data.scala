@@ -6,16 +6,14 @@ import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.util.Scanner
 
+import breeze.linalg.DenseMatrix
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.{DefaultScalaModule, ScalaObjectMapper}
-import org.saddle.index.OuterJoin
-import org.saddle.{Frame, Index, Mat}
 import org.slf4j.LoggerFactory
-import ucar.nc2.NetcdfFile
+import qnt.bz.{DataFrame, DataIndexVector}
+import ucar.nc2.{Attribute, NetcdfFile, Variable}
 
-import scala.collection.JavaConversions._
 import scala.collection.mutable
-import scala.collection.mutable.ListBuffer
 import scala.util.control.NonFatal
 
 object data {
@@ -72,21 +70,19 @@ object data {
     )
   }
 
-
   def loadStockDailySeries(
     ids: Seq[String],
     minDate: LocalDate = LocalDate.of(2007, 1, 1),
     maxDate: LocalDate = LocalDate.now()
-  ) : Map[String, Frame[LocalDate, String, Double]] = {
+  ) : Map[String, DataFrame[LocalDate, String, Double]] = {
     var series = loadStockDailyOriginSeries(ids, minDate, maxDate)
     // fix series by splits
-    series = series.entrySet().map(e => e.getKey match {
-      case fields.vol => (e.getKey, e.getValue / series(fields.split_cumprod))
-      case fields.open | fields.low | fields.high | fields.close | fields.divs
-        => (e.getKey, e.getValue * series(fields.split_cumprod))
-      case _ => (e.getKey, e.getValue)
-    }).toMap
-    Runtime.getRuntime.gc()
+    series = series.map(e => e._1 match {
+      case fields.vol => (e._1, e._2 / series(fields.split_cumprod))
+      case fields.open | fields.low | fields.high | fields.close | fields.divs => (e._1, e._2 * series(fields.split_cumprod))
+      case _ => (e._1, e._2)
+    })
+    //Runtime.getRuntime.gc()
     series
   }
 
@@ -104,23 +100,29 @@ object data {
     val values = Set(open, low, high, close, vol, divs, split, split_cumprod, is_liquid )
   }
 
-  def loadStockDailyOriginSeries(
-                            ids: Seq[String],
-                            minDate: LocalDate = LocalDate.of(2007, 1, 1),
-                            maxDate: LocalDate = LocalDate.now()
-                          ) : Map[String, Frame[LocalDate, String, Double]] = intern.ctx {
+  def loadStockDailyOriginSeries
+  (
+    ids: Seq[String],
+    minDate: LocalDate = LocalDate.of(2007, 1, 1),
+    maxDate: LocalDate = LocalDate.now()
+  ) : Map[String, DataFrame[LocalDate, String, Double]]
+  = intern.ctx {
     val serverIds = ids.map(getServerId).sorted
 
     var result = loadStockDailyRawSeries(serverIds, minDate, maxDate)
 
-    val clientIds = result(fields.close).colIx.map(i => getClientId(i))
-    val sortedClientIds = clientIds.toVec.contents.sorted
-    val timeList = result(fields.close).rowIx.toVec.contents.sorted
-    result = result.entrySet()
-      .map(e => (e.getKey, e.getValue.setColIndex(clientIds).apply(timeList, sortedClientIds)))
-      .toMap
+    val clientIds = result(fields.close).colIdx.toArray.map(i => getClientId(i))
+    val sortedClientList = clientIds.sorted
+    val timeList = result(fields.close).rowIdx.toArray.sorted
 
-    Runtime.getRuntime.gc()
+    result = result.map(e => (
+      e._1,
+      e._2.reIndex(e._2.rowIdx, DataIndexVector(clientIds))
+        .loc(timeList, sortedClientList)
+        .reIndex(DataIndexVector(timeList), DataIndexVector(sortedClientList))
+    ))
+
+//    Runtime.getRuntime.gc()
 
     result
   }
@@ -138,26 +140,35 @@ object data {
     def this(props: Map[String, String]) = this(props("id"), props("name"))
   }
 
-  def loadIndexDailySeries(
-                          ids: Seq[String],
-                          minDate: LocalDate = LocalDate.of(2007, 1, 1),
-                          maxDate: LocalDate = LocalDate.now()
-                          ): Frame[LocalDate, String, Double] = {
+  def loadIndexDailySeries
+  (
+    ids: Seq[String],
+    minDate: LocalDate = LocalDate.of(2007, 1, 1),
+    maxDate: LocalDate = LocalDate.now()
+  ): DataFrame[LocalDate, String, Double] = {
     val params = Map("ids" -> ids, "min_date"-> minDate.toString, "max_date"-> maxDate.toString)
     val resBytes = loadWithRetry("idx/data", params)
-    val resFrame = netcdf2DToFrames(resBytes)
-    resFrame.apply(resFrame.rowIx.toSeq.toArray.sorted, resFrame.colIx.toSeq.toArray.sorted)
+    var resFrame = netcdf2DToFrames(resBytes)
+
+    val sortedTime = resFrame.rowIdx.toIndexedSeq.sorted
+    val sortedAsset = resFrame.colIdx.toIndexedSeq.sorted
+
+    resFrame = resFrame.loc(sortedTime, sortedAsset)
+    resFrame = resFrame.reIndex(DataIndexVector(sortedTime), DataIndexVector(sortedAsset))
+    resFrame = resFrame.copy
+    resFrame
   }
 
 
-  def loadSecgovForms(
-                         ciks: Seq[String],
-                         types: Seq[String] = null,
-                         facts: Seq[String] = null,
-                         skipSegment: Boolean = true,
-                         minDate: LocalDate = LocalDate.of(2007, 1, 1),
-                         maxDate: LocalDate = LocalDate.now()
-                       ): List[SecForm] = intern.ctx {
+  def loadSecgovForms
+  (
+     ciks: Seq[String],
+     types: Seq[String] = null,
+     facts: Seq[String] = null,
+     skipSegment: Boolean = true,
+     minDate: LocalDate = LocalDate.of(2007, 1, 1),
+     maxDate: LocalDate = LocalDate.now()
+   ): List[SecForm] = intern.ctx {
     val lst = mutable.ListBuffer[SecForm]()
     var go = true
     var offset:Int = 0
@@ -172,13 +183,13 @@ object data {
     while (go) {
       val bytes = loadWithRetry("sec.gov/forms", params)
       val p = OBJECT_MAPPER.readValue[List[Map[String,Any]]](bytes)
-      p.foreach(r => lst.add(new SecForm(r)))
+      p.foreach(r => lst.addOne(new SecForm(r)))
       offset += p.length
       params("offset") = offset
       LOG.info(s"fetched reports ${lst.length} (+${p.length})")
       go = p.nonEmpty
     }
-    Runtime.getRuntime.gc()
+    //Runtime.getRuntime.gc()
     lst.toList
   }
 
@@ -279,48 +290,49 @@ object data {
   }
 
   private val LOG = LoggerFactory.getLogger(getClass)
-  private val RETRIES = if(System.getenv().contains("SUBMISSION_ID")) Int.MaxValue else 5
+  private val RETRIES = if(System.getenv().keySet.contains("SUBMISSION_ID")) Int.MaxValue else 5
   private val TIMEOUT = 60*1000
   private val OBJECT_MAPPER = new ObjectMapper() with ScalaObjectMapper
   OBJECT_MAPPER.registerModule(DefaultScalaModule)
   private val BATCH_LIMIT = 300000
 
-  def loadStockDailyRawSeries(
-                                  ids: Seq[String],
-                                  minDate: LocalDate = LocalDate.of(2007, 1, 1),
-                                  maxDate: LocalDate = LocalDate.now()
-                                ) : Map[String, Frame[LocalDate, String, Double]] = {
+  def loadStockDailyRawSeries
+  (
+    ids: Seq[String],
+    minDate: LocalDate = LocalDate.of(2007, 1, 1),
+    maxDate: LocalDate = LocalDate.now()
+  ) : Map[String,  DataFrame[LocalDate, String, Double]] = {
     var days = math.max(1, ChronoUnit.DAYS.between(minDate, maxDate).asInstanceOf[Int])
     var maxChunkSize = BATCH_LIMIT / days
 
     var offset = 0
-    val chunks = ListBuffer[Map[String, Frame[LocalDate, String, Double]]]()
+    var chunks = IndexedSeq[Map[String,  DataFrame[LocalDate, String, Double] ]]()
     while (offset < ids.length) {
       val size = math.min(maxChunkSize, ids.length - offset)
       LOG.info(s"Load chunk offset: offset=$offset size=$size length=${ids.length} maxChunkSize=$maxChunkSize")
       val chunkIds = ids.slice(offset, offset + size)
       val chunk = loadStockDailyRawChunk(chunkIds, minDate, maxDate)
-      chunks += chunk
+      chunks :+= chunk
       offset += size
     }
     mergeStockDailyRawChunks(chunks)
   }
 
-  private def mergeStockDailyRawChunks(chunks: Seq[Map[String, Frame[LocalDate, String, Double]]])
-    :Map[String, Frame[LocalDate, String, Double]] = {
-    var result = Map[String, Frame[LocalDate, String, Double]]()
+  private def mergeStockDailyRawChunks(chunks: IndexedSeq[Map[String, DataFrame[LocalDate, String, Double]]])
+    :Map[String, DataFrame[LocalDate, String, Double]] = {
+    var result = Map[String, DataFrame[LocalDate, String, Double]]()
     for(field <- fields.values) {
-      var frame = chunks.map(c => c(field)).reduce((f1, f2)=>f1.joinPreserveColIx(f2, OuterJoin))
-      result  += (field -> frame)
+      var frames = chunks.map(c => c(field))
+      result += (field -> DataFrame.combine(frames, Double.NaN))
     }
     result
   }
 
   private def loadStockDailyRawChunk(
-                                               ids: Seq[String],
-                                               minDate: LocalDate = LocalDate.of(2007, 1, 1),
-                                               maxDate: LocalDate = LocalDate.now()
-                                             ) : Map[String, Frame[LocalDate, String, Double]] = {
+     ids: Seq[String],
+     minDate: LocalDate = LocalDate.of(2007, 1, 1),
+     maxDate: LocalDate = LocalDate.now()
+  ) : Map[String, DataFrame[LocalDate, String, Double]] = {
     var uri = "data"
     var params = Map(
       "assets" -> ids,
@@ -331,70 +343,81 @@ object data {
     netcdf3DToFrames(dataBytes)
   }
 
-  private def netcdf3DToFrames(bytes: Array[Byte]): Map[String, Frame[LocalDate, String, Double]] = {
+  private def netcdf3DToFrames(bytes: Array[Byte])
+  : Map[String,  DataFrame[LocalDate, String, Double]]
+    = {
     val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
 
-    val vars = dataNetcdf.getVariables.toList.map(v=>(v.getShortName, v)).toMap
+    val vars = dataNetcdf.getVariables
+      .toArray(new Array[Variable](dataNetcdf.getVariables.size()))
+      .map(v=>(v.getShortName, v))
+      .toMap
 
     val timeVar = vars("time")
-    val zeroDateStr = timeVar.getAttributes.toList.filter(i=>i.getShortName == "units").get(0).getStringValue
+    val zeroDateStr = timeVar.getAttributes
+      .toArray(new Array[Attribute](timeVar.getAttributes.size()))
+      .filter(i=>i.getShortName == "units")(0)
+      .getStringValue
+
     val zeroDate = LocalDate.parse(zeroDateStr.split(" since ")(1).split(" ")(0))
     val timeRawArray = dataNetcdf.readSection("time").copyTo1DJavaArray().asInstanceOf[Array[Int]]
     val timeArray = timeRawArray.map(i => intern(zeroDate.plusDays(i)))
 
     var fieldVar = vars("field")
     val fieldRawArray = dataNetcdf.readSection("field").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
-    val fieldArray = fieldRawArray.map(i => intern(new String(i.filter(c => c != '\0'))))
+    val fieldArray = fieldRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
 
     val assetVar = vars("asset")
     val assetRawArray = dataNetcdf.readSection("asset").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
-    val assetArray = assetRawArray.map(i => intern(new String(i.filter(c => c != '\0'))))
+    val assetArray = assetRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
 
     // C-order of dimensions: field,time,asset
     val values = dataNetcdf.readSection("__xarray_dataarray_variable__").copyTo1DJavaArray().asInstanceOf[Array[Double]]
 
-    val timeIdx = Index[LocalDate](timeArray)
-    val assetIdx = Index[String](assetArray)
-    val valueMatrices = values.grouped(timeArray.length*assetArray.length)
-      .map(g => Mat(timeArray.length, assetArray.length, g))
+    val timeIdx = DataIndexVector.apply[LocalDate](timeArray)
+    val assetIdx = DataIndexVector[String](assetArray)
+    val valueMatrices = fieldArray.indices
+      .map(i => DenseMatrix.create(timeArray.length, assetArray.length, values, i * timeArray.length * assetArray.length, assetArray.length, true))
       .toArray
 
-    var result = Map[String, Frame[LocalDate, String, Double]]()
+    var result = Map[String, DataFrame[LocalDate, String, Double]]()
 
     for(fi <- fieldArray.indices) {
       val field = fieldArray(fi)
       val mat = valueMatrices(fi)
-      val frame = Frame[LocalDate, String, Double](mat, timeIdx, assetIdx)
+      val frame = DataFrame[LocalDate, String, Double](timeIdx, assetIdx, mat)
       result += (field -> frame)
     }
     result
   }
 
-  private def netcdf2DToFrames(bytes: Array[Byte]): Frame[LocalDate, String, Double] = {
+  private def netcdf2DToFrames(bytes: Array[Byte]): DataFrame[LocalDate, String, Double] = {
     val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
 
-    val vars = dataNetcdf.getVariables.toList.map(v=>(v.getShortName, v)).toMap
+    val vars = dataNetcdf.getVariables
+      .toArray(new Array[Variable](dataNetcdf.getVariables.size()))
+      .map(v=>(v.getShortName, v)).toMap
 
     val timeVar = vars("time")
-    val zeroDateStr = timeVar.getAttributes.toList.filter(i=>i.getShortName == "units").get(0).getStringValue
+    val zeroDateStr = timeVar.getAttributes
+      .toArray(new Array[Attribute](timeVar.getAttributes.size()))(0)
+      .getStringValue
     val zeroDate = LocalDate.parse(zeroDateStr.split(" since ")(1).split(" ")(0))
     val timeRawArray = dataNetcdf.readSection("time").copyTo1DJavaArray().asInstanceOf[Array[Int]]
     val timeArray = timeRawArray.map(i => zeroDate.plusDays(i))
 
     val assetVar = vars("asset")
     val assetRawArray = dataNetcdf.readSection("asset").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
-    val assetArray = assetRawArray.map(i => new String(i.filter(c => c != '\0')))
+    val assetArray = assetRawArray.map(i => new String(i.filter(c => c != '\u0000')))
 
     // C-order of dimensions: time,asset
     val values = dataNetcdf.readSection("__xarray_dataarray_variable__").copyTo1DJavaArray().asInstanceOf[Array[Double]]
 
-    val timeIdx = Index[LocalDate](timeArray)
-    val assetIdx = Index[String](assetArray)
-    val valueMatrix = Mat(timeArray.length, assetArray.length, values)
+    val timeIdx = DataIndexVector[LocalDate](timeArray)
+    val assetIdx = DataIndexVector[String](assetArray)
+    val valueMatrix = DenseMatrix.create(timeArray.length, assetArray.length, values, 0, assetArray.length, true)
 
-    var result = Map[String, Frame[LocalDate, String, Double]]()
-
-    Frame[LocalDate, String, Double](valueMatrix, timeIdx, assetIdx)
+    DataFrame[LocalDate, String, Double](timeIdx, assetIdx, valueMatrix)
   }
 
   private def loadWithRetry(uri: String, dataObj: Any = null): Array[Byte] = {

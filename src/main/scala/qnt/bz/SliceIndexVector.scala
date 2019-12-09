@@ -1,14 +1,16 @@
-package qnt.breeze
+package qnt.bz
 
 import scala.reflect.ClassTag
 
 class SliceIndexVector[V](
-                           val source: AbstractIndexVector[V],
+                           val source: IndexVector[V],
                            val slices: IndexedSeq[Int]
 ) (implicit ord: Ordering[V], tag: ClassTag[V])
-  extends AbstractIndexVector[V] {
+  extends IndexVector[V] {
 
   override val unique: Boolean = source.unique && slices.distinct.length == slices.length
+
+  override def size: Int = slices.length
 
   override val (ordered:Boolean, reversed:Boolean) =
     if(!source.ordered) {
@@ -28,8 +30,6 @@ class SliceIndexVector[V](
 
   override def indexOfExactUnsafe(value: V): Int = sourceToLocalIdxMap(source.indexOfExactUnsafe(value))
 
-  override def length: Int = slices.length
-
   override def apply(i: Int): V = source(slices(i))
 
   override def update(i: Int, v: V): Unit = source(slices(i))
@@ -42,7 +42,7 @@ class SliceIndexVector[V](
 }
 
 object SliceIndexVector {
-  def apply[V](indexVector: AbstractIndexVector[V], slices: IterableOnce[Int])
+  def apply[V](indexVector: IndexVector[V], slices: IndexedSeq[Int])
               (implicit ord: Ordering[V], tag: ClassTag[V]): SliceIndexVector[V]
     = new SliceIndexVector[V](indexVector, slices.iterator.toIndexedSeq)
 }

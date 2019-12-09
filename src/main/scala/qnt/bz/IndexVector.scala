@@ -1,24 +1,58 @@
-package qnt.breeze
+package qnt.bz
 
-import breeze.linalg.VectorLike
+import breeze.linalg.{Tensor, TensorLike}
 
 import scala.reflect.ClassTag
 
-abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag[V]) extends breeze.linalg.Vector[V]
-  with VectorLike[V, AbstractIndexVector[V]]
-  with Loc1dOps[V, Int, SliceIndexVector[V]]
-  with Iloc1dOps[Int, V, SliceIndexVector[V]]
+abstract class IndexVector[V]
+() (implicit val ord: Ordering[V], val tag: ClassTag[V])
+  extends Tensor[Int, V]
+  with TensorLike[Int, V, IndexVector[V]]
+  with Slice1dOps[V, SliceIndexVector[V]]
 {
 
   def unique: Boolean
   def ordered: Boolean
   def reversed: Boolean
 
-  override def activeSize: Int = length
+  override def activeSize: Int = size
   override def activeIterator: Iterator[(Int, V)] = iterator
   override def activeValuesIterator: Iterator[V] = valuesIterator
   override def activeKeysIterator: Iterator[Int] = keysIterator
-  override def repr: AbstractIndexVector[V] = this
+  override def repr: IndexVector[V] = this
+  override def iterator: Iterator[(Int, V)] = toIndexedSeq.indices.iterator.zip(toIndexedSeq)
+  override def valuesIterator: Iterator[V] = toIndexedSeq.iterator
+  override def keysIterator: Iterator[Int] = keySet.iterator
+  def toArray: Array[V] = toIndexedSeq.toArray
+
+  object keySet extends Set[Int] {
+    override def incl(elem: Int): Set[Int] = Set() ++ iterator + elem
+
+    override def excl(elem: Int): Set[Int] = Set() ++ iterator - elem
+
+    override def contains(elem: Int): Boolean = elem >= 0 && elem < size
+
+    override def iterator: Iterator[Int] = toIndexedSeq.iterator
+  }
+
+  object toIndexedSeq extends IndexedSeq[V] {
+    override def apply(i: Int): V = IndexVector.this.apply(i)
+
+    override def length: Int = IndexVector.this.size
+  }
+
+  def toSet: Set[V] = if(unique) valueSet else throw new IllegalArgumentException("not unique")
+
+  private object valueSet extends Set[V] {
+
+    override def incl(elem: V): Set[V] = Set() ++ iterator + elem
+
+    override def excl(elem: V): Set[V] = Set() ++ iterator - elem
+
+    override def contains(elem: V): Boolean = contains(elem)
+
+    override def iterator: Iterator[V] = valuesIterator
+  }
 
   override def toString: String = toString(5, 5)
 
@@ -36,21 +70,7 @@ abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag
     output.mkString("\n")
   }
 
-  override def copy: IndexVector[V] = IndexVector[V](toArray, unique, ordered, reversed)
-
-  def merge(other: AbstractIndexVector[V]): AbstractIndexVector[V] = {
-    var vals = Array.concat(toArray, other.toArray)
-    if(unique) {
-      vals = vals.distinct
-    }
-    if (ordered) {
-      vals = vals.sorted(ord)
-      if (reversed) {
-        vals = vals.reverse
-      }
-    }
-    IndexVector[V](vals, unique, ordered, reversed)
-  }
+  def copy: DataIndexVector[V] = DataIndexVector[V](toArray, unique, ordered, reversed)
 
   def indexOfExact(value: V): Option[Int]
 
@@ -62,12 +82,12 @@ abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag
       throw new IllegalStateException("unordered")
     }
 
-    if(length < 1) {
+    if(size < 1) {
       return BinarySearchResult(false,false)
     }
 
     var leftLeftIdx = 0
-    var rightRightIdx = this.length - 1
+    var rightRightIdx = this.size - 1
 
     var leftVal: V = apply(leftLeftIdx)
     var rightVal: V = apply(rightRightIdx)
@@ -77,7 +97,7 @@ abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag
       var rightIdx = leftIdx
       if (!unique) {
         do rightIdx += 1
-        while (rightIdx < length && apply(rightIdx) == leftVal)
+        while (rightIdx < size && apply(rightIdx) == leftVal)
         rightIdx -= 1
       }
       rightIdx
@@ -135,10 +155,6 @@ abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag
     BinarySearchResult(false, true, leftRightIdx, rightLeftIdx)
   }
 
-  override def at(v: V): Option[Int] = indexOfExact(v)
-
-  override def iat(i: Int): V = apply(i)
-
   case class BinarySearchResult(
      foundValue: Boolean,
      foundRange: Boolean,
@@ -149,8 +165,8 @@ abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag
     def notFound:Boolean = !found
   }
 
-  override def loc(vals: IterableOnce[V]): SliceIndexVector[V] = {
-    iloc(vals.iterator.map(indexOfExact).filter(_.isDefined).map(_.get))
+  override def loc(vals: IndexedSeq[V]): SliceIndexVector[V] = {
+    iloc(vals.map(indexOfExact).filter(_.isDefined).map(_.get))
   }
 
   override def loc(start: V, end: V, step: Int = 1, keepStart: Boolean = true, keepEnd: Boolean = true,
@@ -158,7 +174,7 @@ abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag
       val startIdx = indexOfBinarySearch(start)
       val endIdx = indexOfBinarySearch(end)
       if(startIdx.notFound || endIdx.notFound) {
-        AbstractIndexVector.empty[V].iloc()
+        IndexVector.empty[V].iloc()
       } else {
         iloc(
           if(step > 0)
@@ -177,25 +193,52 @@ abstract class AbstractIndexVector[V]()(implicit ord: Ordering[V], tag: ClassTag
       }
   }
 
-  override def iloc(idx: IterableOnce[Int]): SliceIndexVector[V] = SliceIndexVector[V](this, idx)
+  override def iloc(idx: IndexedSeq[Int]): SliceIndexVector[V] = SliceIndexVector[V](this, idx)
 
   def contains(v: V): Boolean
 
-  def toSet: Set[V] = if(unique) indexSet else throw new IllegalArgumentException("not unique")
+  def intersect(another: IndexVector[V]): SliceIndexVector[V]
+  = iloc(iterator.filter(e => another.contains(e._2)).map(_._1).toIndexedSeq)
 
-  private object indexSet extends Set[V] {
 
-    override def incl(elem: V): Set[V] = Set() ++ iterator + elem
+  def canEqual(other: Any): Boolean = other.isInstanceOf[IndexVector[V]]
 
-    override def excl(elem: V): Set[V] = Set() ++ iterator - elem
+  override def equals(other: Any): Boolean = other match {
+    case that: IndexVector[V] =>
+      (that canEqual this) &&
+        ord == that.ord &&
+        tag == that.tag &&
+        unique == that.unique &&
+        ordered == that.ordered &&
+        reversed == that.reversed &&
+        valuesIterator.zip(that.valuesIterator).forall(e=>e._1 == e._2)
+    case _ => false
+  }
 
-    override def contains(elem: V): Boolean = contains(elem)
-
-    override def iterator: Iterator[V] = valuesIterator
+  override def hashCode(): Int = {
+    val state = Seq(super.hashCode(), ord, tag)
+    state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
   }
 }
 
-object AbstractIndexVector {
+object IndexVector {
   def empty[V](implicit ord: Ordering[V], tag: ClassTag[V])
-   = new IndexVector[V](Array.empty[V],  true,true, false)(ord, tag)
+   = new DataIndexVector[V](Array.empty[V],  true,true, false)(ord, tag)
+
+  def combine[V]
+  (vectors: Seq[IndexVector[V]]): DataIndexVector[V] = {
+    var first = vectors(0)
+    var vals = vectors.flatMap(_.valuesIterator)
+
+    if(first.unique) {
+      vals = vals.distinct
+    }
+    if (first.ordered) {
+      vals = vals.sorted(vectors(0).ord)
+      if (first.reversed) {
+        vals = vals.reverse
+      }
+    }
+    DataIndexVector[V](vals.toArray(first.tag), first.unique, first.ordered, first.reversed)(first.ord, first.tag)
+  }
 }
