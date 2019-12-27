@@ -1,58 +1,17 @@
 package qnt.bz
 
-import breeze.linalg.{Tensor, TensorLike}
+import qnt.bz.Align.AlignType
 
 import scala.reflect.ClassTag
 
-abstract class IndexVector[V]
-() (implicit val ord: Ordering[V], val tag: ClassTag[V])
-  extends Tensor[Int, V]
-  with TensorLike[Int, V, IndexVector[V]]
+abstract class IndexVector[V] () (implicit val ord: Ordering[V], val tag: ClassTag[V])
+  extends scala.collection.mutable.IndexedSeq[V]
   with Slice1dOps[V, SliceIndexVector[V]]
 {
 
   def unique: Boolean
   def ordered: Boolean
-  def reversed: Boolean
-
-  override def activeSize: Int = size
-  override def activeIterator: Iterator[(Int, V)] = iterator
-  override def activeValuesIterator: Iterator[V] = valuesIterator
-  override def activeKeysIterator: Iterator[Int] = keysIterator
-  override def repr: IndexVector[V] = this
-  override def iterator: Iterator[(Int, V)] = toIndexedSeq.indices.iterator.zip(toIndexedSeq)
-  override def valuesIterator: Iterator[V] = toIndexedSeq.iterator
-  override def keysIterator: Iterator[Int] = keySet.iterator
-  def toArray: Array[V] = toIndexedSeq.toArray
-
-  object keySet extends Set[Int] {
-    override def incl(elem: Int): Set[Int] = Set() ++ iterator + elem
-
-    override def excl(elem: Int): Set[Int] = Set() ++ iterator - elem
-
-    override def contains(elem: Int): Boolean = elem >= 0 && elem < size
-
-    override def iterator: Iterator[Int] = toIndexedSeq.iterator
-  }
-
-  object toIndexedSeq extends IndexedSeq[V] {
-    override def apply(i: Int): V = IndexVector.this.apply(i)
-
-    override def length: Int = IndexVector.this.size
-  }
-
-  def toSet: Set[V] = if(unique) valueSet else throw new IllegalArgumentException("not unique")
-
-  private object valueSet extends Set[V] {
-
-    override def incl(elem: V): Set[V] = Set() ++ iterator + elem
-
-    override def excl(elem: V): Set[V] = Set() ++ iterator - elem
-
-    override def contains(elem: V): Boolean = contains(elem)
-
-    override def iterator: Iterator[V] = valuesIterator
-  }
+  def descending: Boolean
 
   override def toString: String = toString(5, 5)
 
@@ -70,11 +29,20 @@ abstract class IndexVector[V]
     output.mkString("\n")
   }
 
-  def copy: DataIndexVector[V] = DataIndexVector[V](toArray, unique, ordered, reversed)
+  def copy: DataIndexVector[V] = DataIndexVector[V](toArray, unique, ordered, descending)
 
-  def indexOfExact(value: V): Option[Int]
+  override def indexOf[B >: V](elem: B): Int = {
+    val v = elem.asInstanceOf[V]
+    if(unique) {
+      hashIndexOf(v).getOrElse(-1)
+    } else {
+      super.indexOf(v)
+    }
+  }
 
-  def indexOfExactUnsafe(value: V): Int
+  def hashIndexOf(value: V): Option[Int]
+
+  def hashIndexOfUnsafe(value: V): Int
 
   // TODO tests
   def indexOfBinarySearch(value: V): BinarySearchResult = {
@@ -125,11 +93,11 @@ abstract class IndexVector[V]
       return BinarySearchResult(true, false, leftLeftIdx, rightLeftIdx)
     }
 
-    if (ord.lt(rightVal, value) ^ reversed) {
+    if (ord.lt(rightVal, value) ^ descending) {
       return BinarySearchResult(false, false)
     }
 
-    if (ord.gt(leftVal, value) ^ reversed) {
+    if (ord.gt(leftVal, value) ^ descending) {
       return BinarySearchResult(false, false)
     }
 
@@ -142,11 +110,11 @@ abstract class IndexVector[V]
 
       if (midVal == value) {
         return BinarySearchResult(true, false, midLeftIdx, midRightIdx)
-      } else if (ord.lt(midVal, value) ^ reversed) {
+      } else if (ord.lt(midVal, value) ^ descending) {
         leftLeftIdx = midLeftIdx
         leftRightIdx = midRightIdx
         leftVal = midVal
-      } else if (ord.gt(midVal, value) ^ reversed) {
+      } else if (ord.gt(midVal, value) ^ descending) {
         rightRightIdx = midRightIdx
         rightLeftIdx = midLeftIdx
         rightVal = midVal
@@ -166,7 +134,7 @@ abstract class IndexVector[V]
   }
 
   override def loc(vals: IndexedSeq[V]): SliceIndexVector[V] = {
-    iloc(vals.map(indexOfExact).filter(_.isDefined).map(_.get))
+    iloc(vals.map(hashIndexOf).filter(_.isDefined).map(_.get))
   }
 
   override def loc(start: V, end: V, step: Int = 1, keepStart: Boolean = true, keepEnd: Boolean = true,
@@ -195,13 +163,37 @@ abstract class IndexVector[V]
 
   override def iloc(idx: IndexedSeq[Int]): SliceIndexVector[V] = SliceIndexVector[V](this, idx)
 
-  def contains(v: V): Boolean
+  def intersect(anothers: IndexVector[V]*): SliceIndexVector[V] = intersect(anothers)
 
-  def intersect(another: IndexVector[V]): SliceIndexVector[V]
-  = iloc(iterator.filter(e => another.contains(e._2)).map(_._1).toIndexedSeq)
+  def intersect(anothers: IterableOnce[IndexVector[V]]): SliceIndexVector[V]
+  = iloc(this.iterator.zipWithIndex.filter(e => anothers.iterator.indexWhere(_.contains(e._1)) >= 0).map(_._2).toIndexedSeq)
 
+  def combine(vectors: IndexVector[V]*): DataIndexVector[V] = combine(vectors)
 
-  def canEqual(other: Any): Boolean = other.isInstanceOf[IndexVector[V]]
+  def combine(vectors: IterableOnce[IndexVector[V]]): DataIndexVector[V] = {
+    var vals = this.iterator.concat(vectors.iterator.flatMap(_.iterator)).toSeq
+    if(unique) {
+      vals = vals.distinct
+    }
+    if (ordered) {
+      vals = vals.sorted(this.ord)
+      if (descending) {
+        vals = vals.reverse
+      }
+    }
+    DataIndexVector[V](vals.toArray(tag), unique, ordered, descending)(ord, tag)
+  }
+
+  def align(right: IndexVector[V], align: AlignType): IndexVector[V] = {
+    val left = this
+    align match {
+      case Align.left => left
+      case Align.right => right
+      case Align.outer => left.combine(right)
+      case Align.inner => left.intersect(right)
+      case _ => throw new IllegalArgumentException("wrong align " + align);
+    }
+  }
 
   override def equals(other: Any): Boolean = other match {
     case that: IndexVector[V] =>
@@ -210,8 +202,8 @@ abstract class IndexVector[V]
         tag == that.tag &&
         unique == that.unique &&
         ordered == that.ordered &&
-        reversed == that.reversed &&
-        valuesIterator.zip(that.valuesIterator).forall(e=>e._1 == e._2)
+        descending == that.descending &&
+        super.equals(other)
     case _ => false
   }
 
@@ -219,26 +211,19 @@ abstract class IndexVector[V]
     val state = Seq(super.hashCode(), ord, tag)
     state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
   }
+
+  object asMap extends collection.Map[V, Int] {
+    override def -(key: V): collection.Map[V, Int] = ???
+    override def -(key1: V, key2: V, keys: V*): collection.Map[V, Int] = ???
+
+    override def get(key: V): Option[Int] = hashIndexOf(key)
+    override def iterator: Iterator[(V, Int)] = IndexVector.this.iterator.zipWithIndex
+    override val knownSize = IndexVector.this.size
+  }
 }
 
 object IndexVector {
   def empty[V](implicit ord: Ordering[V], tag: ClassTag[V])
    = new DataIndexVector[V](Array.empty[V],  true,true, false)(ord, tag)
 
-  def combine[V]
-  (vectors: Seq[IndexVector[V]]): DataIndexVector[V] = {
-    var first = vectors(0)
-    var vals = vectors.flatMap(_.valuesIterator)
-
-    if(first.unique) {
-      vals = vals.distinct
-    }
-    if (first.ordered) {
-      vals = vals.sorted(vectors(0).ord)
-      if (first.reversed) {
-        vals = vals.reverse
-      }
-    }
-    DataIndexVector[V](vals.toArray(first.tag), first.unique, first.ordered, first.reversed)(first.ord, first.tag)
-  }
 }

@@ -10,34 +10,36 @@ class SliceIndexVector[V](
 
   override val unique: Boolean = source.unique && slices.distinct.length == slices.length
 
-  override def size: Int = slices.length
+  override val length: Int = slices.length
 
-  override val (ordered:Boolean, reversed:Boolean) =
+  override val (ordered:Boolean, descending:Boolean) =
     if(!source.ordered) {
       val ascending = slices.indices.forall(i => i == slices.length - 1 || slices(i) < slices(i + 1))
       val descending = slices.indices.forall(i => i == slices.length - 1 || slices(i) > slices(i + 1))
-      (ascending || descending, source.reversed ^ descending)
+      (ascending || descending, source.descending ^ descending)
     } else {
       (false, false)
     }
 
   private val sourceToLocalIdxMap = slices.zipWithIndex.toMap
 
-  override def indexOfExact(value: V): Option[Int] = {
+  override def hashIndexOf(value: V): Option[Int] = {
     if(!unique) throw new IllegalStateException("not unique")
-    source.indexOfExact(value).map(sourceToLocalIdxMap)
+    source.hashIndexOf(value).map(sourceToLocalIdxMap)
   }
 
-  override def indexOfExactUnsafe(value: V): Int = sourceToLocalIdxMap(source.indexOfExactUnsafe(value))
+  override def hashIndexOfUnsafe(value: V): Int = sourceToLocalIdxMap(source.hashIndexOfUnsafe(value))
 
   override def apply(i: Int): V = source(slices(i))
 
   override def update(i: Int, v: V): Unit = source(slices(i))
 
-  override def contains(v: V): Boolean
-  = if (unique) source.contains(v) && sourceToLocalIdxMap.contains(source.indexOfExactUnsafe(v))
-  else if (ordered) indexOfBinarySearch(v).foundValue
-  else valuesIterator.contains(v)
+  override def contains[A1 >: V](elem: A1): Boolean = {
+    val v = elem.asInstanceOf[V]
+    if (unique) source.contains(v) && sourceToLocalIdxMap.contains(source.hashIndexOfUnsafe(v))
+    else if (ordered) indexOfBinarySearch(v).foundValue
+    else iterator.contains(v)
+  }
 
 }
 

@@ -6,10 +6,10 @@ class IndexVectorTest extends FunSuite {
 
   test("loadStockDailySeries") {
     val idx = DataIndexVector[String](Array("1", "2", "3", "5", "8").reverse, true, true, true)
-    var s = idx(Seq(1,4,3))
+    var s = idx.iloc(Seq(1,4,3))
     //s(1) = "2"
 
-    println(idx.mask(idx.valuesIterator.map(_ > "2").toIndexedSeq))
+    println(idx.mask(idx.iterator.map(_ > "2").toIndexedSeq))
 
     var vals = DenseVector.apply(1,3,4,6,8)
 

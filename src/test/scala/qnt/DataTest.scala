@@ -19,8 +19,8 @@ class DataTest extends FunSuite {
     val ids = stocks.take(2000).map(i => i.id)
     val series = data.loadStockDailySeries(ids, startDate, finishDate)
     assert(series.keys.toSet == data.fields.values)
-    assert(series.values.forall(s => s.colIx.toSeq.forall(id => ids.contains(id))))
-    assert(series.values.forall(s => s.rowIx.toSeq.forall(t => t.compareTo(startDate) >= 0 && t.compareTo(finishDate) <= 0)))
+    assert(series.values.forall(s => s.colIdx.toIndexedSeq.forall(id => ids.contains(id))))
+    assert(series.values.forall(s => s.rowIdx.toIndexedSeq.forall(t => t.compareTo(startDate) >= 0 && t.compareTo(finishDate) <= 0)))
 
     val mb = 1024*1024
     val runtime = Runtime.getRuntime
@@ -42,8 +42,8 @@ class DataTest extends FunSuite {
     val idxList = data.loadIndexList(startDate, finishDate)
     val ids = idxList.take(50).map(i => i.id)
     val series = data.loadIndexDailySeries(ids, startDate, finishDate)
-    assert(series.colIx.toSeq.forall(id => ids.contains(id)))
-    assert(series.rowIx.toSeq.forall(t => t.compareTo(startDate) >= 0 && t.compareTo(finishDate) <= 0))
+    assert(series.colIdx.toIndexedSeq.forall(id => ids.contains(id)))
+    assert(series.rowIdx.toIndexedSeq.forall(t => t.compareTo(startDate) >= 0 && t.compareTo(finishDate) <= 0))
   }
 
   test("load_secgov_forms") {

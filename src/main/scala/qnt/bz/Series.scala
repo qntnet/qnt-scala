@@ -1,12 +1,14 @@
 package qnt.bz
 
-import breeze.linalg.{DenseVector, Tensor, TensorLike, Vector}
+import breeze.linalg.{DenseVector, Vector}
+import breeze.math.Semiring
+import qnt.bz.Align._
 
 import scala.reflect.ClassTag
 
 class Series[I, @specialized(Double, Int, Float, Long) V]
 (val idx: IndexVector[I], val data: Vector[V])(implicit iTag:ClassTag[I], vTag: ClassTag[V])
-  extends Tensor[I, V] with TensorLike[I, V, Series[I, V]]
+  extends scala.collection.Map[I, V]
     with Slice1dOps[I, Series[I, V]]
 {
 
@@ -18,29 +20,11 @@ class Series[I, @specialized(Double, Int, Float, Long) V]
     throw new IllegalArgumentException("index must be unique")
   }
 
-  override def apply(i: I): V = data(idx.indexOfExactUnsafe(i))
+  override def knownSize = idx.length
 
-  override def update(i: I, v: V): Unit = data(idx.indexOfExactUnsafe(i)) = v
+  override def apply(i: I): V = data(idx.hashIndexOfUnsafe(i))
 
-  override def size: Int = data.size
-
-  override def activeSize: Int = idx.size
-
-  override def keySet: Set[I] = idx.toSet
-
-  override def keysIterator: Iterator[I] = keySet.iterator
-
-  override def activeKeysIterator: Iterator[I] = keysIterator
-
-  override def iterator: Iterator[(I, V)] = idx.valuesIterator.zip(data.valuesIterator)
-
-  override def activeIterator: Iterator[(I, V)] = iterator
-
-  override def valuesIterator: Iterator[V] = data.valuesIterator
-
-  override def activeValuesIterator: Iterator[V] = valuesIterator
-
-  override def repr: Series[I, V] = this
+  def update(i: I, v: V): Unit = data(idx.hashIndexOfUnsafe(i)) = v
 
   override def loc(vals: IndexedSeq[I]): Series[I, V] = {
     val x = idx.loc(vals)
@@ -91,9 +75,6 @@ class Series[I, @specialized(Double, Int, Float, Long) V]
     output.map(r => r.mkString(" ")).mkString("\n")
   }
 
-
-  def canEqual(other: Any): Boolean = other.isInstanceOf[Series[I, V]]
-
   override def equals(other: Any): Boolean = other match {
     case that: Series[I, V] =>
       (that canEqual this) &&
@@ -106,13 +87,47 @@ class Series[I, @specialized(Double, Int, Float, Long) V]
     val state = Seq(super.hashCode(), idx, data)
     state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
   }
+
+  def align(right: Series[I, V], align: AlignType)
+  : Series[I, V] = {
+    val left = this
+    var idx = left.idx.align(right.idx, align)
+    this.align(idx)
+  }
+
+  def align(idx: IndexVector[I]): Series[I,V] = {
+    val result = {
+      if(this.idx == idx) this
+      else if (idx.forall(i => this.idx.contains(i))) Series[I,V](idx, this.data(this.idx.loc(idx.toIndexedSeq).slices))
+      else {
+        var r = Series(idx, new DenseVector[V](idx.size))
+        var ii = idx.intersect(this.idx)
+        for(k <- ii.toIndexedSeq) {
+          r(k) = this(k)
+        }
+        r
+      }
+    }
+    result
+  }
+
+  override def get(key: I): Option[V] = idx.hashIndexOf(key).map(i => data(i))
+
+  override def iterator: Iterator[(I, V)] = idx.iterator.zip(data.valuesIterator)
+
+  override def -(key: I): collection.Map[I, V] = ???
+
+  override def -(key1: I, key2: I, keys: I*): collection.Map[I, V] = ???
 }
 
 object Series {
 
-    def apply[I, @specialized(Double, Int, Float, Long) V](index:  IndexVector[I], values: Vector[V])
-                                                          (implicit iTag: ClassTag[I], vTag: ClassTag[V])
-      = new Series[I,V](index, values)
+  def apply[I, @specialized(Double, Int, Float, Long) V](index:  IndexVector[I], values: Vector[V])
+                                                        (implicit iTag: ClassTag[I], vTag: ClassTag[V])
+    = new Series[I,V](index, values)
+
+  def fill[I:ClassTag, @specialized(Double, Int, Float, Long) V:ClassTag:Semiring](index:  IndexVector[I], value: V)
+  = new Series[I,V](index, DenseVector.fill(index.size, value))
 
 }
 

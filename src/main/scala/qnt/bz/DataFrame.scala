@@ -1,9 +1,8 @@
 package qnt.bz
 
-import breeze.linalg.operators.{OpDiv, OpMulMatrix}
-import breeze.linalg.support.CanSlice2
-import breeze.linalg.{DenseMatrix, Matrix, SliceMatrix, Tensor, TensorLike}
+import breeze.linalg.{DenseMatrix, Matrix, SliceMatrix}
 import breeze.math.Semiring
+import qnt.bz.DataFrame.fill
 
 import scala.reflect.ClassTag
 
@@ -15,8 +14,7 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
   val data: Matrix[V]
 )
 (implicit val rTag: ClassTag[R], val cTag: ClassTag[C], val vTag: ClassTag[V], val vSem: Semiring[V])
-  extends Tensor[(R, C), V]
-    with TensorLike[(R, C), V, DataFrame[R, C, V]]
+  extends scala.collection.Map[(R, C),V]
     with Slice2dOps[R,C,DataFrame[R,C,V]] {
 
   if (!rowIdx.unique) {
@@ -34,41 +32,17 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
 
   override def apply(i: (R, C)): V = apply(i._1, i._2)
 
-  def apply(r: R, c: C): V = data(rowIdx.indexOfExactUnsafe(r), colIdx.indexOfExactUnsafe(c))
+  def apply(r: R, c: C): V = data(rowIdx.hashIndexOfUnsafe(r), colIdx.hashIndexOfUnsafe(c))
 
-  override def update(i: (R, C), v: V): Unit
+  def update(i: (R, C), v: V): Unit
   = update(i._1, i._2, v)
 
   def update(r: R, c: C, v: V): Unit
-  = data((rowIdx.indexOfExactUnsafe(r), colIdx.indexOfExactUnsafe(c))) = v
+  = data((rowIdx.hashIndexOfUnsafe(r), colIdx.hashIndexOfUnsafe(c))) = v
 
-  override def size: Int = data.size
-
-  override def activeSize: Int = data.size
+  override def knownSize: Int = rowIdx.length * colIdx.length
 
   override def iterator: Iterator[((R, C), V)] = data.iterator.map(v => ((rowIdx(v._1._1), colIdx(v._1._2)), v._2))
-
-  override def activeIterator: Iterator[((R, C), V)] = iterator
-
-  object keySet extends Set[(R, C)] {
-    override def incl(elem: (R, C)): Set[(R, C)] = Set() ++ iterator + elem
-
-    override def excl(elem: (R, C)): Set[(R, C)] = Set() ++ iterator + elem
-
-    override def contains(elem: (R, C)): Boolean = rowIdx.contains(elem._1) && colIdx.contains(elem._2)
-
-    override def iterator: Iterator[(R, C)] = rowIdx.valuesIterator.flatMap(r => colIdx.valuesIterator.map(c => (r, c)))
-  }
-
-  override def keysIterator: Iterator[(R, C)] = keySet.iterator
-
-  override def activeKeysIterator: Iterator[(R, C)] = keySet.iterator
-
-  override def valuesIterator: Iterator[V] = data.valuesIterator
-
-  override def activeValuesIterator: Iterator[V] = data.valuesIterator
-
-  override def repr: DataFrame[R, C, V] = this
 
   override def toString: String = toString(5, 5, 5, 5)
 
@@ -174,7 +148,7 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
     : DataFrame[R, C, V] = iloc(colIdx.loc(start, end, step, keepStart, keepEnd, round).slices)
   }
 
-  def reIndex[R, C](rows: IndexVector[R], cols: IndexVector[C])
+  def withIdx[R, C](rows: IndexVector[R], cols: IndexVector[C])
   : DataFrame[R, C, V] = DataFrame(rows, cols, data)(rTag = rows.tag, cTag = cols.tag, vTag = vTag, vSem = vSem)
 
   def intersect(another: DataFrame[R, C, V]): DataFrame[R, C, V] = {
@@ -187,7 +161,50 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
     }
   }
 
-  def canEqual(other: Any): Boolean = other.isInstanceOf[DataFrame[R, C, V]]
+  def align(right: DataFrame[R,C,V], align: Align.AlignType, missingValue: V): DataFrame[R,C,V] = {
+    val left = this
+    val rowIdx = left.rowIdx.align(right.rowIdx, align)
+    val colIdx = left.colIdx.align(right.colIdx, align)
+    this.align(rowIdx, colIdx, missingValue)
+  }
+
+  def align(rowIdx:IndexVector[R], colIdx: IndexVector[C], missingValue: V): DataFrame[R, C, V] = {
+    if(this.rowIdx == rowIdx && this.colIdx == colIdx) this
+    else {
+      val containsAllRows = rowIdx.forall(e => this.rowIdx.contains(e))
+      val containsAllCols = colIdx.forall(e => this.colIdx.contains(e))
+      if(containsAllCols && containsAllRows) {
+        loc(rowIdx.toIndexedSeq, colIdx.toIndexedSeq).withIdx(rowIdx, colIdx)
+      } else  {
+        var df = fill(rowIdx, colIdx, missingValue)
+        var ir = this.rowIdx.intersect(rowIdx)
+        var ic = this.colIdx.intersect(colIdx)
+        for (r <- ir.toIndexedSeq; c <- ic.toIndexedSeq) {
+          df(r,c) = this(r,c)
+        }
+        df
+      }
+    }
+  }
+
+  def combine(frames: Seq[DataFrame[R, C, V]], missingValue: V)
+  : DataFrame[R, C, V] = {
+    val first = this
+
+    val rowIdx = first.rowIdx.combine(frames.map(_.rowIdx))
+    val colIdx = first.colIdx.combine(frames.map(_.colIdx))
+
+    val result = fill(rowIdx, colIdx, missingValue)(this.rTag, this.cTag, this.vTag, this.vSem)
+
+    for (f <- frames) {
+      for (r <- f.rowIdx.toIndexedSeq; c <- f.colIdx.toIndexedSeq) {
+        result(r, c) = f(r, c)
+      }
+    }
+    result
+  }
+
+  def fillLike(value:V): DataFrame[R, C, V] = DataFrame.fill(rowIdx, colIdx, value)
 
   override def equals(other: Any): Boolean = other match {
     case that: DataFrame[R, C, V] =>
@@ -202,6 +219,20 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
     val state = Seq(super.hashCode(), rowIdx, colIdx, data)
     state.map(_.hashCode()).foldLeft(0)((a, b) => 31 * a + b)
   }
+
+  def transpose : DataFrame[C, R, V] = { // this is just logical transpose
+    val dt:Matrix[V] = data match {
+      case d: DenseMatrix[V] => d.t
+      case _ => data.asInstanceOf[SliceMatrix[Int, Int, V]].toDenseMatrix.t
+    }
+    DataFrame(colIdx, rowIdx, dt)
+  }
+
+  override def -(key: (R, C)): collection.Map[(R, C), V] = ???
+
+  override def -(key1: (R, C), key2: (R, C), keys: (R, C)*): collection.Map[(R, C), V] = ???
+
+  override def get(key: (R, C)): Option[V] = rowIdx.hashIndexOf(key._1).zip(colIdx.hashIndexOf(key._2)).map(data.apply)
 }
 
 object DataFrame {
@@ -218,55 +249,4 @@ object DataFrame {
     DenseMatrix.create(ridx.size, cidx.size, new Array[V](ridx.size * cidx.size))
   )
 
-  def combine[R, C, @specialized(Double, Int, Float, Long) V](frames: Seq[DataFrame[R, C, V]], missingValue: V): DataFrame[R, C, V] = {
-    val first = frames(0)
-    import first._
-
-    val rowIdx = IndexVector.combine(frames.map(_.rowIdx))
-    val colIdx = IndexVector.combine(frames.map(_.colIdx))
-
-    val result = fill(rowIdx, colIdx, missingValue)
-
-    for (f <- frames) {
-      for (r <- f.rowIdx.toIndexedSeq; c <- f.colIdx.toIndexedSeq) {
-        result(r, c) = f(r, c)
-      }
-    }
-    result
-  }
-
-  implicit def canSlice2[R, C, V]: CanSlice2[DataFrame[R, C, V], R, C, V]
-  = new CanSlice2[DataFrame[R, C, V], R, C, V] {
-    override def apply(from: DataFrame[R, C, V], slice: R, slice2: C): V = from.apply(slice, slice2)
-  }
-
-
-  implicit def divOps2[R, C, @specialized(Double, Float, Int, Long) V]
-  : OpDiv.Impl2[DataFrame[R, C, V], DataFrame[R, C, V], DataFrame[R, C, V]] =
-    new OpDiv.Impl2[DataFrame[R, C, V], DataFrame[R, C, V], DataFrame[R, C, V]]() {
-      override def apply(v: DataFrame[R, C, V], v2: DataFrame[R, C, V]): DataFrame[R, C, V] = {
-        val result = v.intersect(v2).copy
-        for (c <- result.colIdx.toIndexedSeq; r <- result.rowIdx.toIndexedSeq) {
-          result(r, c) = (v(r, c).asInstanceOf[Double] / v(r, c).asInstanceOf[Double]).asInstanceOf[V]
-        }
-        result
-      }
-    }
-
-
-  implicit def mulOps2[R, C, @specialized(Double, Int, Float, Long) V]: OpMulMatrix.Impl2[DataFrame[R, C, V], DataFrame[R, C, V], DataFrame[R, C, V]] =
-    new OpMulMatrix.Impl2[DataFrame[R, C, V], DataFrame[R, C, V], DataFrame[R, C, V]] {
-      override def apply(v: DataFrame[R, C, V], v2: DataFrame[R, C, V]): DataFrame[R, C, V] = {
-        import v._
-        if (v.rowIdx == v2.rowIdx && v.colIdx == v2.colIdx) {
-          DataFrame(v.rowIdx, v2.colIdx, v.data.toDenseMatrix *:* v2.data.toDenseMatrix)
-        } else {
-          val result = v.intersect(v2).copy
-          for (c <- result.colIdx.toIndexedSeq; r <- result.rowIdx.toIndexedSeq) {
-            result(r, c) = (v(r, c).asInstanceOf[Double] * v2(r, c).asInstanceOf[Double]).asInstanceOf[V]
-          }
-          result
-        }
-      }
-    }
 }

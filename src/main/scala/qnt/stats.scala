@@ -1,8 +1,93 @@
 package qnt
 
+import java.time.LocalDate
+
+import qnt.bz.{Align, DataFrame, Series}
+
 //import org.saddle.{Series, Frame}
 
 object stats {
+
+  private def calcTr(
+                  high: DataFrame[LocalDate, String, Double],
+                  low: DataFrame[LocalDate, String, Double],
+                  close: DataFrame[LocalDate, String, Double]
+                ): DataFrame[LocalDate, String, Double] = {
+    val res = close.fillLike(Double.NaN)
+    res.data.foreachKey(e => {
+      val l = low.data(e)
+      val h = high.data(e)
+      val c = close.data(e)
+      val d1 = h - l
+      val d2 = h - c
+      val d3 = c - l
+      val r = math.max(math.max(d1,d2),d3)
+      res.data(e) = r
+    })
+    res
+  }
+
+  private def calcSma(d: DataFrame[LocalDate, String, Double], period: Int): DataFrame[LocalDate, String, Double] = {
+    // sma without nan correction
+    val res = d.fillLike(Double.NaN)
+    for(c <- d.colIdx.indices; r <- period-1 to d.rowIdx.indices.end) { //TODO transpose to speed up
+      var sum = 0d
+      for(i <- 0 until period) {
+        sum = sum + d.data(r-i, c)
+      }
+      res.data.update(r, c, sum / period)
+    }
+    res
+  }
+
+  private def calcSlippage
+  (
+    high: DataFrame[LocalDate, String, Double],
+    low: DataFrame[LocalDate, String, Double],
+    close: DataFrame[LocalDate, String, Double],
+    period: Int = 14,
+    fract: Double = 0.05d
+  ): DataFrame[LocalDate, String, Double] = {
+    var res = calcTr(high, low, close);
+    res = calcSma(res, period)
+    res.data := res.data * fract
+    res
+  }
+
+  def calcRelativeReturns(
+                           inOpen: DataFrame[LocalDate, String, Double],
+                           inHigh: DataFrame[LocalDate, String, Double],
+                           inLow: DataFrame[LocalDate, String, Double],
+                           inClose: DataFrame[LocalDate, String, Double],
+                           inLiquid: DataFrame[LocalDate, String, Double],
+                           inWeights: DataFrame[LocalDate, String, Double],
+                           slippageFactor: Double = 0.05d
+                         ): Series[LocalDate, Double] = {
+
+    val weights = inWeights.align(inClose, Align.right, Double.NaN)
+    val open = inOpen.align(inClose, Align.right, Double.NaN)
+    val high = inHigh.align(inClose, Align.right, Double.NaN)
+    val low = inLow.align(inClose, Align.right, Double.NaN)
+    val close = inClose
+    val liquid = inLiquid.align(inClose, Align.right, Double.NaN)
+    val slippage = calcSlippage(high, low, close, fract=slippageFactor)
+
+    val N = weights.fillLike(0)
+    val equityBeforeBuy = weights.fillLike(0)
+    val equityAfterBuy = weights.fillLike(0)
+    val equityTonight = weights.fillLike(0)
+
+    val unlocked = Series.fill(weights.colIdx, 0)
+
+    for(ti <- weights.rowIdx.indices) {
+
+
+    }
+
+
+    null
+  }
+
 //
 //  def calcRelativeReturns(
 //                           inOpen:Frame[LocalDate, String, Double],

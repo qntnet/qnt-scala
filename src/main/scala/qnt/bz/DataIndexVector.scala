@@ -6,17 +6,17 @@ import scala.collection.{IterableOnce, mutable}
 import scala.reflect.ClassTag
 
 class DataIndexVector[V](
-                      private val data: Array[V],
-                      val unique: Boolean,
-                      val ordered: Boolean,
-                      val reversed: Boolean,
+                          private val data: Array[V],
+                          val unique: Boolean,
+                          val ordered: Boolean,
+                          val descending: Boolean,
                     )(implicit ord: Ordering[V], tag: ClassTag[V]) extends IndexVector[V] {
 
   private val valueToIdxMap = new mutable.HashMap[V, Int]()
 
   if (ordered) {
     for (i <- 0 to (data.length - 2))
-      if (ord.gt(data(i), data(i + 1)) ^ reversed) {
+      if (ord.gt(data(i), data(i + 1)) ^ descending) {
         throw new IllegalArgumentException(s"ordering violation idx1=$i idx2=${i + 1}")
       }
   }
@@ -38,13 +38,13 @@ class DataIndexVector[V](
     if (ordered) {
       if (i > 0) {
         val prev = apply(i - 1)
-        if (ord.lt(prev, v) ^ reversed) {
+        if (ord.lt(prev, v) ^ descending) {
           throw new IllegalArgumentException(s"ordering violation (prev, cur) idx=$i")
         }
       }
       if (i < size - 1) {
         val nxt = apply(i + 1)
-        if (ord.gt(v, nxt) ^ reversed) {
+        if (ord.gt(v, nxt) ^ descending) {
           throw new IllegalArgumentException(s"ordering violation (cur, nxt) idx=$i")
         }
       }
@@ -54,19 +54,21 @@ class DataIndexVector[V](
     valueToIdxMap(v) = i
   }
 
-  override def size: Int = data.length
+  override def length: Int = data.length
 
   override def apply(i: Int): V = data(i)
 
-  override def contains(v: V): Boolean
-  = if (unique) valueToIdxMap.contains(v)
-  else if (ordered) indexOfBinarySearch(v).foundValue
-  else data.contains(v)
+  override def contains[A1 >: V](elem: A1): Boolean = {
+    val v = elem.asInstanceOf[V]
+    if (unique) valueToIdxMap.contains(v)
+    else if (ordered) indexOfBinarySearch(v).foundValue
+    else data.contains(v)
+  }
 
-  override def indexOfExact(v: V): Option[Int] =
+  override def hashIndexOf(v: V): Option[Int] =
     if (unique) valueToIdxMap.get(v) else throw new IllegalStateException("not unique")
 
-  override def indexOfExactUnsafe(value: V): Int = valueToIdxMap(value)
+  override def hashIndexOfUnsafe(value: V): Int = valueToIdxMap.apply(value)
 
 }
 
@@ -89,7 +91,7 @@ object DataIndexVector {
               (implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V] = {
     val values = sliceVector.toArray
     val t = sliceVector.source
-    apply(values, t.unique, t.ordered, t.reversed)
+    apply(values, t.unique, t.ordered, t.descending)
   }
 
   def apply[V](vector: Vector[V], unique: Boolean, ordered: Boolean, reversed: Boolean)

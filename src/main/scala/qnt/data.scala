@@ -77,9 +77,12 @@ object data {
   ) : Map[String, DataFrame[LocalDate, String, Double]] = {
     var series = loadStockDailyOriginSeries(ids, minDate, maxDate)
     // fix series by splits
-    series = series.map(e => e._1 match {
-      case fields.vol => (e._1, e._2 / series(fields.split_cumprod))
-      case fields.open | fields.low | fields.high | fields.close | fields.divs => (e._1, e._2 * series(fields.split_cumprod))
+    var splitCumprod = series(fields.split_cumprod)
+    series.foreach(e => e._1 match {
+      case fields.vol =>
+        e._2.data.foreachKey(k => e._2.data(k) = e._2.data(k) / splitCumprod.data(k))
+      case fields.open | fields.low | fields.high | fields.close | fields.divs =>
+        e._2.data.foreachKey(k => e._2.data(k) = e._2.data(k) * splitCumprod.data(k))
       case _ => (e._1, e._2)
     })
     //Runtime.getRuntime.gc()
@@ -117,9 +120,9 @@ object data {
 
     result = result.map(e => (
       e._1,
-      e._2.reIndex(e._2.rowIdx, DataIndexVector(clientIds))
+      e._2.withIdx(e._2.rowIdx, DataIndexVector(clientIds))
         .loc(timeList, sortedClientList)
-        .reIndex(DataIndexVector(timeList), DataIndexVector(sortedClientList))
+        .withIdx(DataIndexVector(timeList), DataIndexVector(sortedClientList))
     ))
 
 //    Runtime.getRuntime.gc()
@@ -154,7 +157,7 @@ object data {
     val sortedAsset = resFrame.colIdx.toIndexedSeq.sorted
 
     resFrame = resFrame.loc(sortedTime, sortedAsset)
-    resFrame = resFrame.reIndex(DataIndexVector(sortedTime), DataIndexVector(sortedAsset))
+    resFrame = resFrame.withIdx(DataIndexVector(sortedTime), DataIndexVector(sortedAsset))
     resFrame = resFrame.copy
     resFrame
   }
@@ -323,7 +326,7 @@ object data {
     var result = Map[String, DataFrame[LocalDate, String, Double]]()
     for(field <- fields.values) {
       var frames = chunks.map(c => c(field))
-      result += (field -> DataFrame.combine(frames, Double.NaN))
+      result += (field -> frames(0).combine(frames, Double.NaN))
     }
     result
   }
