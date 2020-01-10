@@ -7,7 +7,7 @@ import qnt.bz.Align._
 import scala.reflect.ClassTag
 
 class Series[I, @specialized(Double, Int, Float, Long) V]
-(val idx: IndexVector[I], val data: Vector[V])(implicit iTag:ClassTag[I], vTag: ClassTag[V])
+(val idx: IndexVector[I], val data: Vector[V])(implicit iTag:ClassTag[I], vTag: ClassTag[V], vSem: Semiring[V])
   extends scala.collection.Map[I, V]
     with Slice1dOps[I, Series[I, V]]
 {
@@ -31,9 +31,9 @@ class Series[I, @specialized(Double, Int, Float, Long) V]
     Series[I, V](x, data(x.slices))
   }
 
-  override def loc(start: I, end: I, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
+  override def locRange(start: I, end: I, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
   : Series[I, V] = {
-    val x = idx.loc(start, end, step, keepEnd, keepEnd, round)
+    val x = idx.locRange(start, end, step, keepEnd, keepEnd, round)
     Series[I, V](x, data(x.slices))
   }
 
@@ -111,6 +111,8 @@ class Series[I, @specialized(Double, Int, Float, Long) V]
     result
   }
 
+  def fillLike(fillValue:V): Series[I, V] = Series.fill(idx, fillValue)
+
   override def get(key: I): Option[V] = idx.hashIndexOf(key).map(i => data(i))
 
   override def iterator: Iterator[(I, V)] = idx.iterator.zip(data.valuesIterator)
@@ -123,7 +125,7 @@ class Series[I, @specialized(Double, Int, Float, Long) V]
 object Series {
 
   def apply[I, @specialized(Double, Int, Float, Long) V](index:  IndexVector[I], values: Vector[V])
-                                                        (implicit iTag: ClassTag[I], vTag: ClassTag[V])
+                                                (implicit iTag: ClassTag[I], vTag: ClassTag[V], vSem: Semiring[V])
     = new Series[I,V](index, values)
 
   def fill[I:ClassTag, @specialized(Double, Int, Float, Long) V:ClassTag:Semiring](index:  IndexVector[I], value: V)

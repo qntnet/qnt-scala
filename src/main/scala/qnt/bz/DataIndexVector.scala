@@ -1,7 +1,5 @@
 package qnt.bz
 
-import breeze.linalg.Vector
-
 import scala.collection.{IterableOnce, mutable}
 import scala.reflect.ClassTag
 
@@ -86,20 +84,6 @@ object DataIndexVector {
     val descending = arr.indices.take(arr.length-1).forall(i => ord.gt(arr(i), arr(i + 1)))
     apply(arr, unique, ascending || descending, descending)
   }
-
-  def apply[V](sliceVector: SliceIndexVector[V])
-              (implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V] = {
-    val values = sliceVector.toArray
-    val t = sliceVector.source
-    apply(values, t.unique, t.ordered, t.descending)
-  }
-
-  def apply[V](vector: Vector[V], unique: Boolean, ordered: Boolean, reversed: Boolean)
-              (implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V]
-  = apply(vector.valuesIterator, unique, ordered, reversed)
-
-  def apply[V](vector: Vector[V])(implicit ord: Ordering[V], tag: ClassTag[V]): DataIndexVector[V]
-  = apply(vector.valuesIterator)
 
 }
 

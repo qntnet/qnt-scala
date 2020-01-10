@@ -42,7 +42,7 @@ object RoundArrayRange {
     val dist = realEnd - realStart
 
     val ustep = step * (if (step < 0) -1 else 1)
-    var udist = step * (if (step < 0) -1 else 1)
+    var udist = dist * (if (step < 0) -1 else 1)
 
     if(round && udist < 0) {
       udist += length

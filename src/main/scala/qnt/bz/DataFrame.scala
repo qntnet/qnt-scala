@@ -34,11 +34,9 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
 
   def apply(r: R, c: C): V = data(rowIdx.hashIndexOfUnsafe(r), colIdx.hashIndexOfUnsafe(c))
 
-  def update(i: (R, C), v: V): Unit
-  = update(i._1, i._2, v)
+  def update(i: (R, C), v: V): Unit = update(i._1, i._2, v)
 
-  def update(r: R, c: C, v: V): Unit
-  = data((rowIdx.hashIndexOfUnsafe(r), colIdx.hashIndexOfUnsafe(c))) = v
+  def update(r: R, c: C, v: V): Unit = data((rowIdx.hashIndexOfUnsafe(r), colIdx.hashIndexOfUnsafe(c))) = v
 
   override def knownSize: Int = rowIdx.length * colIdx.length
 
@@ -48,8 +46,8 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
 
   def toString
   (
-    headRows: Int, tailRows: Int,
-    headCols: Int, tailCols: Int,
+    headRows: Int = 5, tailRows: Int = 5,
+    headCols: Int = 5, tailCols: Int = 5,
     rowFormat: R => String = _.toString,
     colFormat: C => String = _.toString,
     dataFormat: V => String = _.toString,
@@ -130,8 +128,8 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
     override def loc(vals: IndexedSeq[R]): DataFrame[R, C, V]
     = iloc(rowIdx.loc(vals).slices)
 
-    override def loc(start: R, end: R, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
-    : DataFrame[R, C, V] = iloc(rowIdx.loc(start, end, step, keepStart, keepEnd, round).slices)
+    override def locRange(start: R, end: R, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
+    : DataFrame[R, C, V] = iloc(rowIdx.locRange(start, end, step, keepStart, keepEnd, round).slices)
   }
 
   object colOps extends Slice1dOps[C, DataFrame[R, C, V]] {
@@ -144,8 +142,8 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
     override def loc(vals: IndexedSeq[C]): DataFrame[R, C, V]
     = iloc(colIdx.loc(vals).slices)
 
-    override def loc(start: C, end: C, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
-    : DataFrame[R, C, V] = iloc(colIdx.loc(start, end, step, keepStart, keepEnd, round).slices)
+    override def locRange(start: C, end: C, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
+    : DataFrame[R, C, V] = iloc(colIdx.locRange(start, end, step, keepStart, keepEnd, round).slices)
   }
 
   def withIdx[R, C](rows: IndexVector[R], cols: IndexVector[C])
@@ -206,6 +204,57 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
 
   def fillLike(value:V): DataFrame[R, C, V] = DataFrame.fill(rowIdx, colIdx, value)
 
+  def ffillRows(missedValue: V): DataFrame[R,C,V] = {
+    val result = copy
+    for( ai <- colIdx.indices; ti <- 1 to rowIdx.indices.last) {
+      if(result.data(ti, ai).equals(missedValue)) {
+        result.data.update(ti,ai,result.data(ti-1,ai))
+      }
+    }
+    result
+  }
+
+  def fillMissed(missedValue: V, fillValue: V): DataFrame[R,C,V] = {
+    val result = copy
+    for(ai <- colIdx.indices; ti <- 0 to rowIdx.indices.last) {
+      if(result.data(ti, ai).equals(missedValue)) {
+        result.data.update(ti, ai, fillValue)
+      }
+    }
+    result
+  }
+
+  def shiftRows(period:Int, fillValue: V): DataFrame[R,C,V]  = {
+    val result = copy
+    if(period > 0) {
+      for(ai <- colIdx.indices; ti <- rowIdx.indices) {
+        if(ti < period) {
+          result.data.update(ti, ai, fillValue)
+        } else {
+          result.data.update(ti,ai, this.data(ti - period, ai))
+        }
+      }
+    } else if (period < 0) {
+      for(ai <- colIdx.indices; ti <- rowIdx.indices) {
+        if(ti > rowIdx.indices.last - period) {
+          result.data.update(ti, ai, fillValue)
+        } else {
+          result.data.update(ti,ai, this.data(ti + period, ai))
+        }
+      }
+    }
+    result
+  }
+
+  def firstNotEmptyRow(missingValue: V): R = {
+    for(r <- rowIdx; c <- colIdx) {
+      if(!this(r,c).equals(missingValue)) {
+        return r
+      }
+    }
+    rowIdx.last
+  }
+
   override def equals(other: Any): Boolean = other match {
     case that: DataFrame[R, C, V] =>
       (that canEqual this) &&
@@ -246,7 +295,21 @@ object DataFrame {
   : DataFrame[R, C, V] = new DataFrame[R, C, V](
     ridx,
     cidx,
-    DenseMatrix.create(ridx.size, cidx.size, new Array[V](ridx.size * cidx.size))
+    DenseMatrix.fill(ridx.size, cidx.size)(fillValue)
   )
+
+  def fromSeries[R:ClassTag,C:ClassTag:Ordering,V:ClassTag:Semiring](columns: (C, Series[R,V])*) : DataFrame[R, C, V] = {
+    var columnIdx = DataIndexVector(columns.map(i=>i._1))
+    val firstSeries: Series[R,V] = columns(0)._2
+    var df : DataFrame[R, C, V] = fill(firstSeries.idx, columnIdx, firstSeries.data(0))
+    for(c <- columns) {
+      val colLabel = c._1
+      val colSeries = c._2
+      for(r <- colSeries.idx) {
+        df(r,colLabel) = colSeries(r)
+      }
+    }
+    df
+  }
 
 }

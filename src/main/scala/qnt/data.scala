@@ -17,6 +17,29 @@ import scala.collection.mutable
 import scala.util.control.NonFatal
 
 object data {
+  def normalizeOutput(output: DataFrame[LocalDate, String, Double]): DataFrame[LocalDate, String, Double] = {
+    val assets = output.colIdx.toIndexedSeq.sortBy(i=>i)
+    val assetIdx = DataIndexVector.apply(assets, true, true, false)
+    val time = output.rowIdx.toIndexedSeq.sortBy(i=>i)
+    val timeIdx = DataIndexVector.apply(time, true, true, false)
+    val result = output.align(timeIdx, assetIdx, Double.NaN)
+
+    for(ti <- result.rowIdx.indices) {
+      var sum = 0d
+      for(ai <- result.colIdx.indices) {
+        if(result.data(ti, ai).isNaN) {
+          result.data(ti, ai) = 0
+        }
+        sum += math.abs(result.data(ti, ai))
+      }
+      if(sum > 1) {
+        for(ai <- result.colIdx.indices) {
+          result.data(ti, ai) = result.data(ti, ai) / sum
+        }
+      }
+    }
+    result
+  }
 
   def loadStockList(
                      minDate: LocalDate = LocalDate.of(2007, 1, 1),
@@ -71,11 +94,12 @@ object data {
   }
 
   def loadStockDailySeries(
-    ids: Seq[String],
+    ids: Seq[String] = null,
     minDate: LocalDate = LocalDate.of(2007, 1, 1),
     maxDate: LocalDate = LocalDate.now()
   ) : Map[String, DataFrame[LocalDate, String, Double]] = {
-    var series = loadStockDailyOriginSeries(ids, minDate, maxDate)
+    val realIds = if (ids != null) ids else loadStockList(minDate, maxDate).map(i => i.id)
+    var series = loadStockDailyOriginSeries(realIds, minDate, maxDate)
     // fix series by splits
     var splitCumprod = series(fields.split_cumprod)
     series.foreach(e => e._1 match {

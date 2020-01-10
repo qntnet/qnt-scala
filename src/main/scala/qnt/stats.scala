@@ -7,8 +7,9 @@ import qnt.bz.{Align, DataFrame, Series}
 //import org.saddle.{Series, Frame}
 
 object stats {
+  val EPS:Double = 0.0000001
 
-  private def calcTr(
+  def calcTr(
                   high: DataFrame[LocalDate, String, Double],
                   low: DataFrame[LocalDate, String, Double],
                   close: DataFrame[LocalDate, String, Double]
@@ -17,30 +18,31 @@ object stats {
     res.data.foreachKey(e => {
       val l = low.data(e)
       val h = high.data(e)
-      val c = close.data(e)
+      val c = if(e._1 > 0) close.data(e._1 - 1, e._2) else Double.NaN
       val d1 = h - l
-      val d2 = h - c
-      val d3 = c - l
+      val d2 = math.abs(h - c)
+      val d3 = math.abs(c - l)
       val r = math.max(math.max(d1,d2),d3)
       res.data(e) = r
     })
     res
   }
 
-  private def calcSma(d: DataFrame[LocalDate, String, Double], period: Int): DataFrame[LocalDate, String, Double] = {
+  def calcSma(d: DataFrame[LocalDate, String, Double], period: Int): DataFrame[LocalDate, String, Double] = {
     // sma without nan correction
     val res = d.fillLike(Double.NaN)
-    for(c <- d.colIdx.indices; r <- period-1 to d.rowIdx.indices.end) { //TODO transpose to speed up
+    for(c <- d.colIdx.indices; r <- period-1 to d.rowIdx.indices.last) { //TODO transpose to speed up
       var sum = 0d
       for(i <- 0 until period) {
-        sum = sum + d.data(r-i, c)
+        val v = d.data(r-i, c)
+        sum = sum + v
       }
       res.data.update(r, c, sum / period)
     }
     res
   }
 
-  private def calcSlippage
+  def calcSlippage
   (
     high: DataFrame[LocalDate, String, Double],
     low: DataFrame[LocalDate, String, Double],
@@ -48,107 +50,191 @@ object stats {
     period: Int = 14,
     fract: Double = 0.05d
   ): DataFrame[LocalDate, String, Double] = {
-    var res = calcTr(high, low, close);
+    var res = calcTr(high, low, close)
     res = calcSma(res, period)
-    res.data := res.data * fract
-    res
+    res.data :*= fract
+    res.ffillRows(Double.NaN)
   }
 
-  def calcRelativeReturns(
+  def calcRelativeReturn(
                            inOpen: DataFrame[LocalDate, String, Double],
                            inHigh: DataFrame[LocalDate, String, Double],
                            inLow: DataFrame[LocalDate, String, Double],
                            inClose: DataFrame[LocalDate, String, Double],
+                           inDivs: DataFrame[LocalDate, String, Double],
                            inLiquid: DataFrame[LocalDate, String, Double],
                            inWeights: DataFrame[LocalDate, String, Double],
                            slippageFactor: Double = 0.05d
                          ): Series[LocalDate, Double] = {
 
-    val weights = inWeights.align(inClose, Align.right, Double.NaN)
-    val open = inOpen.align(inClose, Align.right, Double.NaN)
-    val high = inHigh.align(inClose, Align.right, Double.NaN)
-    val low = inLow.align(inClose, Align.right, Double.NaN)
-    val close = inClose
-    val liquid = inLiquid.align(inClose, Align.right, Double.NaN)
-    val slippage = calcSlippage(high, low, close, fract=slippageFactor)
+    val slippageWhole = calcSlippage(inHigh, inLow, inClose, fract=slippageFactor)
 
-    val N = weights.fillLike(0)
-    val equityBeforeBuy = weights.fillLike(0)
-    val equityAfterBuy = weights.fillLike(0)
-    val equityTonight = weights.fillLike(0)
+    val firstRowSlippage = slippageWhole.firstNotEmptyRow(Double.NaN)
+    val firstRowWeight = inWeights.firstNotEmptyRow(Double.NaN)
+    val firstRow = if(firstRowSlippage.compareTo(firstRowWeight) > 0) firstRowSlippage else firstRowWeight
 
-    val unlocked = Series.fill(weights.colIdx, 0)
+    val slippage = slippageWhole.rowOps.locRange(firstRow, slippageWhole.rowIdx.last, 1).copy
 
-    for(ti <- weights.rowIdx.indices) {
+    val weights = data.normalizeOutput(inWeights).shiftRows(1, 0).align(slippage, Align.right, Double.NaN)
+    val open = inOpen.align(slippage, Align.right, Double.NaN)
+    val openff = open.ffillRows(Double.NaN).fillMissed(Double.NaN, 0d)
+    val divs = inDivs.align(slippage, Align.right, Double.NaN).fillMissed(Double.NaN, 0)
+    val liquid = inLiquid.align(slippage, Align.right, Double.NaN).fillMissed(Double.NaN, 0d)
+    val close = inClose.align(slippage, Align.right, Double.NaN)
+    val closeff = close.ffillRows(Double.NaN).fillMissed(Double.NaN, 0d)
 
+    val N = Series.fill(weights.colIdx, 0d) // shares count
+    val prevN = Series.fill(weights.colIdx, 0d) // prev shares count
+    val unlocked = Series.fill(weights.colIdx, false)
 
+    var equityBeforeBuy = 1d
+    var equityAfterBuy = 1d
+    var equityTonight = 1d
+
+    val relativeReturns = Series.fill(weights.rowIdx, 0d)
+
+    for(ti <- 0 to weights.rowIdx.indices.last) {
+
+      for(ai <- weights.colIdx.indices) {
+        var u = true
+        u &&= slippage.data(ti, ai).isFinite
+        u &&= weights.data(ti, ai).isFinite
+        u &&= open.data(ti, ai).isFinite && open.data(ti, ai) > EPS
+        u &&= close.data(ti, ai).isFinite
+        unlocked.data(ai) = u
+      }
+
+      equityBeforeBuy = equityAfterBuy
+      for (ai <- weights.colIdx.indices) {
+        equityBeforeBuy += (openff.data(ti, ai) - openff.data(math.max(0, ti - 1), ai) + divs.data(ti, ai)) * N.data(ai)
+      }
+
+      var wSum = 0d
+      var wUnlocked = 0d
+      var unoperableEquity = 0d
+      for(ai <- weights.colIdx.indices) {
+        val w = weights.data(ti, ai)
+        if (!w.isNaN) {
+          wSum += math.abs(w)
+        }
+        if(unlocked.data(ai)) {
+          wUnlocked += math.abs(w)
+        } else {
+          unoperableEquity += math.abs(openff.data(ti, ai) * N.data(ai))
+        }
+      }
+      val wFreeCash = math.max(1, wSum) - wSum
+      val wOperable = wUnlocked + wFreeCash
+      var equityOperableBeforeBuy = equityBeforeBuy - unoperableEquity
+
+      prevN.data := N.data
+
+      if(wOperable < EPS) {
+        equityAfterBuy = equityBeforeBuy
+      } else {
+        var S = 0d // current slippage
+
+        for (ai <- weights.colIdx.indices) {
+          if (unlocked.data(ai)) {
+            if (liquid.data(ti, ai) > 0)
+              N.data(ai) = equityOperableBeforeBuy * weights.data(ti, ai) / (wOperable * open.data(ti, ai))
+            else
+              N.data(ai) = 0
+            S += slippage.data(ti, ai) * math.abs(N.data(ai) - prevN.data(ai))
+          }
+        }
+        equityAfterBuy = equityBeforeBuy - S
+      }
+
+      var growthTonight = 0d
+      for (ai <- weights.colIdx.indices) {
+        growthTonight += N.data(ai) * (closeff.data(ti, ai) - openff.data(ti, ai))
+      }
+
+      var prevEquityTonight = equityTonight
+      equityTonight = equityAfterBuy + growthTonight
+      relativeReturns.data(ti) =  equityTonight/prevEquityTonight - 1
+
+      println(
+        "t", ti,
+        "wSum", wSum,
+        "w_free_cash", wFreeCash,
+        "w_unlocked", wUnlocked,
+        "w_operable", wOperable,
+        "equity_before_buy", equityBeforeBuy,
+        "equity_after_buy", equityAfterBuy
+      )
     }
 
-
-    null
+    relativeReturns
   }
 
-//
-//  def calcRelativeReturns(
-//                           inOpen:Frame[LocalDate, String, Double],
-//                           inClose:Frame[LocalDate, String, Double],
-//                           inLiquid:Frame[LocalDate, String, Double],
-//                           inWeights:Frame[LocalDate, String, Double]
-//                         ):Series[LocalDate, Double] = {
-//    // arrangement
-//    var (weights, _) = inWeights.align(inOpen)
-//    val (open, _) = inOpen.align(weights)
-//    val (close, _) = inClose.align(weights)
-//    val (liquid, _) = inLiquid.align(weights)
-//
-
-
-    /*
-    N = np.zeros(WEIGHT.shape)  # shares count
-
-    equity_before_buy = np.zeros([WEIGHT.shape[0]])
-    equity_operable_before_buy = np.zeros([WEIGHT.shape[0]])
-    equity_after_buy = np.zeros([WEIGHT.shape[0]])
-    equity_tonight = np.zeros([WEIGHT.shape[0]])
-
-    for t in range(0, WEIGHT.shape[0]):
-        unlocked = UNLOCKED[t]  # available for trading
-        locked = np.logical_not(unlocked)
-
-        if t == 0:
-            equity_before_buy[0] = 1
-            N[0] = 0
-        else:
-            N[t] = N[t - 1]
-            divs = np.nansum(N[t] * DIVS[t])
-            equity_before_buy[t] = equity_after_buy[t - 1] + np.nansum((OPEN[t] - OPEN[t - 1]) * N[t]) + divs
-
-        w_sum = np.nansum(abs(WEIGHT[t]))
-        w_free_cash = max(1, w_sum) - w_sum
-        w_unlocked = np.nansum(abs(WEIGHT[t, unlocked]))
-        w_operable = w_unlocked + w_free_cash
-
-        equity_operable_before_buy[t] = equity_before_buy[t] - np.nansum(OPEN[t, locked] * abs(N[t, locked]))
-
-        if w_operable < EPS:
-            equity_after_buy[t] = equity_before_buy[t]
-        else:
-            N[t, unlocked] = equity_operable_before_buy[t] * WEIGHT[t, unlocked] / (w_operable * OPEN[t, unlocked])
-            dN = N[t, unlocked]
-            if t > 0:
-                dN = dN - N[t - 1, unlocked]
-            S = np.nansum(SLIPPAGE[t, unlocked] * abs(dN))  # slippage for this step
-            equity_after_buy[t] = equity_before_buy[t] - S
-
-        equity_tonight[t] = equity_after_buy[t] + np.nansum((CLOSE[t] - OPEN[t]) * N[t])
-
-    E = equity_tonight
-    Ep = np.roll(E, 1)
-    Ep[0] = 1
-    RR = E / Ep - 1
-    RR = np.where(np.isfinite(RR), RR, 0)
-
-    null
+  def calcStdDev[I](
+                     series: Series[I, Double],
+                     max_periods: Int = 252,
+                     min_periods: Int = 2
+                   ): Series[I, Double] = {
+    val stddev = series.fillLike(Double.NaN)
+    for(i <- min_periods - 1 to series.idx.indices.last) {
+      val start = math.max(0, (i - max_periods + 1))
+      var mean = 0d
+      for(j <- start to i) {
+        mean += series.data(j)
+      }
+      mean /= (i - start + 1)
+      var sum = 0d
+      for(j <- start to i) {
+        val v = series.data(j)
+        sum += (v - mean)*(v - mean)
+      }
+      stddev.data(i) = math.sqrt(sum / (i - start))
+    }
+    stddev
   }
-  */
+
+  def calcVolatilityAnnualized(
+                                relativeReturns: Series[LocalDate, Double],
+                                max_periods: Int = 252,
+                                min_periods: Int = 2
+                              ): Series[LocalDate, Double] = {
+    var volatility = calcStdDev(relativeReturns, max_periods, min_periods)
+    volatility.data :*= math.sqrt(252) // annualization
+    volatility
+  }
+
+  def calcMeanReturnAnnualized(
+                                relativeReturns: Series[LocalDate, Double],
+                                max_periods: Int = 252,
+                                min_periods: Int = 2
+                              ): Series[LocalDate, Double] = {
+    val mr = relativeReturns.fillLike(Double.NaN)
+    for(i <- min_periods - 1 to relativeReturns.idx.indices.last) {
+      val start = math.max(0, (i - max_periods + 1))
+      var mean = 0d
+      for(j <- start to i) {
+        mean += math.log(relativeReturns.data(j) + 1)
+      }
+      mean /= (i - start + 1)
+      mean = math.exp(mean) - 1d
+
+      mean = math.pow(mean + 1, 252) - 1 // annualization
+
+      mr.data(i) = mean
+    }
+    mr
+  }
+
+  def calcSharpeRatio(
+                       relativeReturns: Series[LocalDate, Double],
+                       max_periods: Int = 252,
+                       min_periods: Int = 2
+                   ): Series[LocalDate, Double] = {
+    val volatility = calcVolatilityAnnualized(relativeReturns, max_periods, min_periods)
+    val meanReturn = calcMeanReturnAnnualized(relativeReturns, max_periods, min_periods)
+    val sharpeRatio = relativeReturns.fillLike(Double.NaN)
+    for(i <- relativeReturns.idx.indices) {
+      sharpeRatio.data(i) = meanReturn.data(i) / volatility.data(i)
+    }
+    sharpeRatio
+  }
 }

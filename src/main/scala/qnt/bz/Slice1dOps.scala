@@ -7,7 +7,7 @@ trait Slice1dOps[K, S] {
   def iloc(vals: Iterable[Int]): S = iloc(vals.toIndexedSeq)
   def iloc(vals: IterableOnce[Int]): S = iloc(vals.iterator.toIndexedSeq)
   def iloc(vals: IndexedSeq[Int]): S
-  def iloc(start: Int, end: Int, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
+  def ilocRange(start: Int, end: Int, step: Int = 1, keepStart: Boolean = true, keepEnd: Boolean = true, round: Boolean = true)
   : S = iloc(RoundArrayRange(size, start, end, step, keepStart, keepEnd, round))
 
   def mask(m: Boolean*): S = mask(m.toIndexedSeq)
@@ -22,5 +22,5 @@ trait Slice1dOps[K, S] {
   def loc(vals: Iterable[K]): S = loc(vals.toIndexedSeq)
   def loc(vals: IterableOnce[K]): S = loc(vals.iterator.toIndexedSeq)
   def loc(vals: IndexedSeq[K]): S
-  def loc(start: K, end: K, step: Int = 1, keepStart: Boolean = true, keepEnd: Boolean = true, round: Boolean = true): S
+  def locRange(start: K, end: K, step: Int = 1, keepStart: Boolean = true, keepEnd: Boolean = true, round: Boolean = true): S
 }

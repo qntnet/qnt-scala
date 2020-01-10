@@ -29,7 +29,7 @@ abstract class IndexVector[V] () (implicit val ord: Ordering[V], val tag: ClassT
     output.mkString("\n")
   }
 
-  def copy: DataIndexVector[V] = DataIndexVector[V](toArray, unique, ordered, descending)
+  def copy: DataIndexVector[V] = DataIndexVector[V](this, unique, ordered, descending)
 
   override def indexOf[B >: V](elem: B): Int = {
     val v = elem.asInstanceOf[V]
@@ -137,14 +137,14 @@ abstract class IndexVector[V] () (implicit val ord: Ordering[V], val tag: ClassT
     iloc(vals.map(hashIndexOf).filter(_.isDefined).map(_.get))
   }
 
-  override def loc(start: V, end: V, step: Int = 1, keepStart: Boolean = true, keepEnd: Boolean = true,
-                   round: Boolean = true): SliceIndexVector[V] = {
+  override def locRange(start: V, end: V, step: Int = 1, keepStart: Boolean = true, keepEnd: Boolean = true,
+                        round: Boolean = true): SliceIndexVector[V] = {
       val startIdx = indexOfBinarySearch(start)
       val endIdx = indexOfBinarySearch(end)
       if(startIdx.notFound || endIdx.notFound) {
         IndexVector.empty[V].iloc()
       } else {
-        iloc(
+        ilocRange(
           if(step > 0)
             if(!unique && keepStart && startIdx.foundValue) startIdx.start else startIdx.end
           else

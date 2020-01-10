@@ -1,4 +1,4 @@
-name := "qnt"
+name := "qnt-scala"
 
 version := "0.1"
 
