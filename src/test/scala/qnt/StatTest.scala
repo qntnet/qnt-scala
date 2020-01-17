@@ -3,7 +3,6 @@ package qnt
 import java.time.LocalDate
 
 import org.scalatest.FunSuite
-import qnt.bz.DataFrame
 
 class StatTest extends FunSuite {
 
@@ -15,16 +14,11 @@ class StatTest extends FunSuite {
     )
     var output = dataSet(data.fields.is_liquid).copy
     output = data.normalizeOutput(output)
-    output.data :*= -1d
+    output.data :*= 1d
 
     println(output)
     val rr = stats.calcRelativeReturn(
-      dataSet(data.fields.open),
-      dataSet(data.fields.high),
-      dataSet(data.fields.low),
-      dataSet(data.fields.close),
-      dataSet(data.fields.divs),
-      dataSet(data.fields.is_liquid),
+      dataSet,
       output,
       slippageFactor = 0.05d
     )
@@ -33,17 +27,10 @@ class StatTest extends FunSuite {
     //println(slippage.rowOps.ilocRange(13, slippage.rowIdx.length))
 
     println("stats")
-    val v = stats.calcVolatilityAnnualized(rr, 252*3)
-    val mr = stats.calcMeanReturnAnnualized(rr, 252*3)
-    val sr = stats.calcSharpeRatio(rr, 252*3)
-    val df = DataFrame.fromSeries(
-      ("rr", rr),
-      ("mr", mr),
-      ("v", v),
-      ("sr", sr)
-    )
 
-    println(df.toString(headRows = 20))
+    val s = stats.calcStats(dataSet, output)
+
+    println(s.toString(headRows = 20))
   }
 
 }

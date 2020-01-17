@@ -130,6 +130,20 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
 
     override def locRange(start: R, end: R, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
     : DataFrame[R, C, V] = iloc(rowIdx.locRange(start, end, step, keepStart, keepEnd, round).slices)
+
+    def iget(ci: Int): Series[C, V] = {
+      var d = data match {
+        case d: DenseMatrix[V] => d.apply(::, ci);
+        case d: SliceMatrix[Int, Int, V] => d.apply(::, ci)
+        case _ => ???
+      }
+      Series(colIdx, d)
+    }
+
+    def get(c: C): Series[C, V] = {
+      var i = colIdx.hashIndexOfUnsafe(c)
+      iget(i)
+    }
   }
 
   object colOps extends Slice1dOps[C, DataFrame[R, C, V]] {
@@ -144,6 +158,21 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
 
     override def locRange(start: C, end: C, step: Int, keepStart: Boolean, keepEnd: Boolean, round: Boolean)
     : DataFrame[R, C, V] = iloc(colIdx.locRange(start, end, step, keepStart, keepEnd, round).slices)
+
+
+    def iget(ri: Int): Series[R, V] = {
+      var d = data match {
+        case d: DenseMatrix[V] => d.apply(ri, ::)
+        case d: SliceMatrix[Int, Int, V] => d.apply(ri, ::)
+        case _ => ???
+      }
+      Series(rowIdx, d.t)
+    }
+
+    def get(c: C): Series[R, V] = {
+      var i = colIdx.hashIndexOfUnsafe(c)
+      iget(i)
+    }
   }
 
   def withIdx[R, C](rows: IndexVector[R], cols: IndexVector[C])
@@ -298,7 +327,17 @@ object DataFrame {
     DenseMatrix.fill(ridx.size, cidx.size)(fillValue)
   )
 
-  def fromSeries[R:ClassTag,C:ClassTag:Ordering,V:ClassTag:Semiring](columns: (C, Series[R,V])*) : DataFrame[R, C, V] = {
+  def fromSeriesColumns[R:ClassTag,C:ClassTag:Ordering,V:ClassTag:Semiring](columns: (C, Series[R,V])*)
+  : DataFrame[R, C, V] = fromSeriesColumns(columns.toIndexedSeq)
+
+  def fromSeriesColumns[R:ClassTag,C:ClassTag:Ordering,V:ClassTag:Semiring](columns: Iterable[(C, Series[R,V])])
+  : DataFrame[R, C, V] = fromSeriesColumns(columns.toIndexedSeq)
+
+  def fromSeriesColumns[R:ClassTag,C:ClassTag:Ordering,V:ClassTag:Semiring](columns: IterableOnce[(C, Series[R,V])])
+  : DataFrame[R, C, V] = fromSeriesColumns(columns.iterator.toIndexedSeq)
+
+  def fromSeriesColumns[R:ClassTag,C:ClassTag:Ordering,V:ClassTag:Semiring](columns: IndexedSeq[(C, Series[R,V])])
+  : DataFrame[R, C, V] = {
     var columnIdx = DataIndexVector(columns.map(i=>i._1))
     val firstSeries: Series[R,V] = columns(0)._2
     var df : DataFrame[R, C, V] = fill(firstSeries.idx, columnIdx, firstSeries.data(0))

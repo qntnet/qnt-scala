@@ -142,7 +142,7 @@ abstract class IndexVector[V] () (implicit val ord: Ordering[V], val tag: ClassT
       val startIdx = indexOfBinarySearch(start)
       val endIdx = indexOfBinarySearch(end)
       if(startIdx.notFound || endIdx.notFound) {
-        IndexVector.empty[V].iloc()
+        IndexVector.empty[V].iloc(Seq())
       } else {
         ilocRange(
           if(step > 0)
