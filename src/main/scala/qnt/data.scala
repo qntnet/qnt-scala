@@ -1,6 +1,6 @@
 package qnt
 
-import java.io.{File, FileWriter}
+import java.io.{File, FileInputStream, FileOutputStream, FileWriter}
 import java.net.{HttpURLConnection, URL}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -10,8 +10,9 @@ import breeze.linalg.DenseMatrix
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.{DefaultScalaModule, ScalaObjectMapper}
 import org.slf4j.LoggerFactory
-import qnt.bz.{DataFrame, DataIndexVector}
-import ucar.nc2.{Attribute, NetcdfFile, Variable}
+import qnt.bz.{DataFrame, DataIndexVector, Series}
+import ucar.ma2.DataType
+import ucar.nc2.{Attribute, NetcdfFile, NetcdfFileWriter, Variable}
 
 import scala.collection.mutable
 import scala.util.control.NonFatal
@@ -370,7 +371,7 @@ object data {
     netcdf3DToFrames(dataBytes)
   }
 
-  private def netcdf3DToFrames(bytes: Array[Byte])
+  def netcdf3DToFrames(bytes: Array[Byte])
   : Map[String,  DataFrame[LocalDate, String, Double]]
     = {
     val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
@@ -418,7 +419,7 @@ object data {
     result
   }
 
-  private def netcdf2DToFrames(bytes: Array[Byte]): DataFrame[LocalDate, String, Double] = {
+  def netcdf2DToFrames(bytes: Array[Byte]): DataFrame[LocalDate, String, Double] = {
     val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
 
     val vars = dataNetcdf.getVariables
@@ -445,6 +446,111 @@ object data {
     val valueMatrix = DenseMatrix.create(timeArray.length, assetArray.length, values, 0, assetArray.length, true)
 
     DataFrame[LocalDate, String, Double](timeIdx, assetIdx, valueMatrix)
+  }
+
+  def seriesToNetcdf(series: Series[LocalDate, Double]): Array[Byte] = {
+    val tmpFile = File.createTempFile("series-", ".nc")
+
+    try {
+      val f = NetcdfFileWriter.createNew(NetcdfFileWriter.Version.netcdf3, tmpFile.getAbsolutePath)
+      try {
+        f.addDimension(null, "time", series.idx.length)
+        val timeVar = f.addVariable(null, "time", DataType.INT, "time")
+        val zeroDate = series.idx(0)
+        timeVar.addAttribute(new Attribute("units", s"days since $zeroDate"))
+        timeVar.addAttribute(new Attribute("calendar", "gregorian"))
+
+        val dataVar = f.addVariable(null, "__xarray_dataarray_variable__", DataType.DOUBLE, "time")
+        dataVar.addAttribute(new Attribute("_FillValue", Double.NaN))
+
+        f.create()
+
+        val timeArr = series.idx.toArray.map(t => ChronoUnit.DAYS.between(zeroDate, t).intValue)
+        f.write(timeVar, ucar.ma2.Array.factory(timeArr))
+        f.write(dataVar, ucar.ma2.Array.factory(series.data.toArray))
+
+      } finally {
+        f.close()
+      }
+      val fis = new FileInputStream(tmpFile)
+      try {
+        fis.readAllBytes()
+      } finally {
+        fis.close()
+      }
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  def dataFrameToNetcdf(df: DataFrame[LocalDate, String, Double]): Array[Byte] = {
+    val tmpFile = File.createTempFile("df-", ".nc")
+
+    try {
+      val f = NetcdfFileWriter.createNew(NetcdfFileWriter.Version.netcdf3, tmpFile.getAbsolutePath)
+      try {
+        f.addDimension(null, "time", df.rowIdx.length)
+        f.addDimension(null, "asset", df.colIdx.length)
+        val maxAssetLen = df.colIdx.map(s => s.length).max
+        val assetStrDim = "str" + maxAssetLen
+        f.addDimension(null, assetStrDim, maxAssetLen)
+
+        val timeVar = f.addVariable(null, "time", DataType.INT, "time")
+        val zeroDate = df.rowIdx(0)
+        timeVar.addAttribute(new Attribute("units", s"days since $zeroDate"))
+        timeVar.addAttribute(new Attribute("calendar", "gregorian"))
+
+        val assetVar = f.addVariable(null, "asset", DataType.CHAR, "asset " + assetStrDim)
+        assetVar.addAttribute(new Attribute("_Encoding", "utf-8"))
+
+        val dataVar = f.addVariable(null, "__xarray_dataarray_variable__", DataType.DOUBLE, "time asset")
+        dataVar.addAttribute(new Attribute("_FillValue", Double.NaN))
+
+        f.create()
+
+        val timeArr = df.rowIdx.toArray.map(t => ChronoUnit.DAYS.between(zeroDate, t).intValue)
+        f.write(timeVar, ucar.ma2.Array.factory(timeArr))
+        f.write(assetVar, ucar.ma2.Array.factory(df.colIdx.toArray.map(s => toCharSeqFxdSize(s, maxAssetLen))))
+        f.write(dataVar, ucar.ma2.Array.factory(
+          DataType.DOUBLE,
+          Array[Int](df.rowIdx.length, df.colIdx.length),
+          df.data.toDenseMatrix.t.toArray
+        ))
+
+      } finally {
+        f.close()
+      }
+      val fis = new FileInputStream(tmpFile)
+      try {
+        fis.readAllBytes()
+      } finally {
+        fis.close()
+      }
+    } finally {
+      tmpFile.delete()
+    }
+  }
+
+  def writeOutput(df: DataFrame[LocalDate, String, Double]):Unit = {
+    val normalized = normalizeOutput(df)
+    val bytes = dataFrameToNetcdf(normalized)
+    val gz = GzipUtils.gzipCompress(bytes)
+
+    val path = System.getenv().getOrDefault("OUTPUT_PATH", "fractions.nc.gz")
+
+    val w = new FileOutputStream(path)
+    try{
+      w.write(gz)
+    } finally {
+      w.close()
+    }
+  }
+
+  private def toCharSeqFxdSize(str: String, size: Int):Array[Char] = {
+    var res = new Array[Char](size)
+    var charStr = str.toCharArray
+    Array.copy(charStr, 0, res, 0, charStr.length)
+    res
   }
 
   private def loadWithRetry(uri: String, dataObj: Any = null): Array[Byte] = {

@@ -1,7 +1,13 @@
 package qnt
 
+import java.io.{ByteArrayOutputStream, IOException}
+import java.net.{HttpURLConnection, URL}
 import java.time.LocalDate
+import java.util.Base64
+import java.util.zip.GZIPOutputStream
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.scala.{DefaultScalaModule, ScalaObjectMapper}
 import qnt.bz.{Align, DataFrame, Series}
 
 import scala.util.control.Breaks._
@@ -389,8 +395,6 @@ object stats {
     calcSma(turnover, maxPeriods, minPeriods)
   }
 
-  def calcCorrelation(relativeReturns: Series[LocalDate, Double]): Series[LocalDate, Double] = ???
-
   def calcStats(
                  inData: Map[String, DataFrame[LocalDate, String, Double]],
                  inWeights: DataFrame[LocalDate, String, Double],
@@ -425,6 +429,65 @@ object stats {
       fields.avgTurnover -> avgTurnover.align(relativeReturns, Align.right)
     )
   }
+
+  private def gzipCompress(uncompressedData: Array[Byte]) = {
+    var result: Array[Byte] = null
+    try {
+      val bos = new ByteArrayOutputStream(uncompressedData.length)
+      val gzipOS = new GZIPOutputStream(bos)
+      try {
+        gzipOS.write(uncompressedData)
+        // You need to close it before using bos
+        gzipOS.close()
+        result = bos.toByteArray
+      } catch {
+        case e: IOException =>
+          e.printStackTrace()
+      } finally {
+        if (bos != null) bos.close()
+        if (gzipOS != null) gzipOS.close()
+      }
+    }
+    result
+  }
+
+  def calcCorrelation(relativeReturns: Series[LocalDate, Double]): IndexedSeq[Map[String, Any]] = {
+    val engineUrl = System.getenv().getOrDefault("ENGINE_CORRELATION_URL", "http://localhost:8080/referee/submission/forCorrelation")
+    val statanUrl = System.getenv().getOrDefault("STATAN_CORRELATION_URL", "http://localhost:8081/statan/correlation")
+    val participantId = System.getenv().getOrDefault("PARTICIPANT_ID", "0")
+
+    val subLst = OBJECT_MAPPER.readValue(
+      new URL(engineUrl + "?participantId=" + participantId),
+      classOf[Seq[Map[String, Any]]]).map(s => s("id")
+    )
+    val rrBytes = data.seriesToNetcdf(relativeReturns)
+    val rrGz = GzipUtils.gzipCompress(rrBytes)
+    val rrB64 = Base64.getEncoder.encodeToString(rrGz)
+
+    val r = Map[String, AnyRef]("relative_returns" -> rrB64, "submission_ids" -> subLst)
+    val rBytes = OBJECT_MAPPER.writeValueAsBytes(r)
+
+    var conn: HttpURLConnection = new URL(statanUrl).openConnection().asInstanceOf[HttpURLConnection]
+    conn.setDoOutput(true)
+    conn.setRequestMethod("POST")
+    conn.setUseCaches(false)
+    conn.setDoInput(true)
+    conn.setRequestProperty("Content-Length", Integer.toString(rBytes.length))
+    conn.getOutputStream.write(rBytes)
+    conn.getOutputStream.flush()
+
+    val code = conn.getResponseCode
+    if(code != 200) {
+      throw new IllegalStateException(s"Wrong status code: $code")
+    }
+    val is = conn.getInputStream
+    val responseBytes =  is.readAllBytes()
+
+    OBJECT_MAPPER.readValue(responseBytes, classOf[IndexedSeq[Map[String, Any]]])
+  }
+
+  private val OBJECT_MAPPER = new ObjectMapper() with ScalaObjectMapper
+  OBJECT_MAPPER.registerModule(DefaultScalaModule)
 
   object fields {
     val relativeReturn = "relativeReturn"

@@ -31,6 +31,17 @@ class StatTest extends FunSuite {
     val s = stats.calcStats(dataSet, output)
 
     println(s.toString(headRows = 20))
+
+    //println(stats.calcCorrelation(rr))
+
+
+    var ob = data.dataFrameToNetcdf(output)
+
+    var o2 = data.netcdf2DToFrames(ob)
+
+    print(o2)
+
+    data.writeOutput(output)
   }
 
 }
