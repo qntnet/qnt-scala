@@ -27,4 +27,4 @@ libraryDependencies +=  "org.scalanlp" %% "breeze" % "1.0"
 
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.8" % "test"
 
-addSbtPlugin("com.jsuereth" % "sbt-pgp" % "1.1.1")
+//addSbtPlugin("com.jsuereth" % "sbt-pgp" % "1.1.1")
