@@ -1,4 +1,4 @@
-package qnt
+package ai.quantnet
 
 import org.slf4j.LoggerFactory
 

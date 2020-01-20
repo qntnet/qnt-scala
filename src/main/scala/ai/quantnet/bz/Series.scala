@@ -1,8 +1,8 @@
-package qnt.bz
+package ai.quantnet.bz
 
+import ai.quantnet.bz.Align._
 import breeze.linalg.{DenseVector, Vector}
 import breeze.math.Semiring
-import qnt.bz.Align._
 
 import scala.reflect.ClassTag
 

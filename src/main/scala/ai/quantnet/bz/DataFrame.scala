@@ -1,8 +1,8 @@
-package qnt.bz
+package ai.quantnet.bz
 
+import ai.quantnet.bz.DataFrame.fill
 import breeze.linalg.{DenseMatrix, Matrix, SliceMatrix}
 import breeze.math.Semiring
-import qnt.bz.DataFrame.fill
 
 import scala.reflect.ClassTag
 

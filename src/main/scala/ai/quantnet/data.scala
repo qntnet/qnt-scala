@@ -1,12 +1,12 @@
-package qnt
+package ai.quantnet
 
 import java.io.{File, FileOutputStream, FileWriter}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.util.Scanner
 
+import ai.quantnet.bz.{DataFrame, DataIndexVector}
 import org.slf4j.LoggerFactory
-import qnt.bz.{DataFrame, DataIndexVector}
 
 import scala.collection.mutable
 

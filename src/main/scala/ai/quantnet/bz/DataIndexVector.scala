@@ -1,4 +1,4 @@
-package qnt.bz
+package ai.quantnet.bz
 
 import scala.collection.{IterableOnce, mutable}
 import scala.reflect.ClassTag

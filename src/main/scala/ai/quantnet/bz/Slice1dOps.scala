@@ -1,4 +1,4 @@
-package qnt.bz
+package ai.quantnet.bz
 
 trait Slice1dOps[K, S] {
   def size: Int

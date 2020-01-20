@@ -1,4 +1,4 @@
-package qnt
+package ai.quantnet
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, IOException}
 import java.util.zip.{GZIPInputStream, GZIPOutputStream}

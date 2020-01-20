@@ -1,4 +1,4 @@
-package qnt
+package ai.quantnet
 
 import java.time.LocalDate
 

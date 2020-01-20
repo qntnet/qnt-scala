@@ -1,11 +1,11 @@
-package qnt
+package ai.quantnet
 
 import java.io.{File, FileInputStream}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
+import ai.quantnet.bz.{DataFrame, DataIndexVector, Series}
 import breeze.linalg.DenseMatrix
-import qnt.bz.{DataFrame, DataIndexVector, Series}
 import ucar.ma2.DataType
 import ucar.nc2.{Attribute, NetcdfFile, NetcdfFileWriter, Variable}
 

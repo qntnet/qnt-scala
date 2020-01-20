@@ -1,4 +1,5 @@
-package qnt.bz
+package ai.quantnet.bz
+
 import breeze.linalg.{DenseMatrix, DenseVector}
 import org.scalatest.FunSuite
 

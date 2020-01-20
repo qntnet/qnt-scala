@@ -1,4 +1,4 @@
-package qnt.bz
+package ai.quantnet.bz
 
 object BinarySearch {
 

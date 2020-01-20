@@ -1,6 +1,6 @@
-package qnt.bz
+package ai.quantnet.bz
 
-import qnt.bz.Align.AlignType
+import ai.quantnet.bz.Align.AlignType
 
 import scala.reflect.ClassTag
 

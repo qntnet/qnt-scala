@@ -1,9 +1,9 @@
-package qnt
+package ai.quantnet
 
 import java.time.LocalDate
 import java.util.Base64
 
-import qnt.bz.{Align, DataFrame, Series}
+import ai.quantnet.bz.{Align, DataFrame, Series}
 
 import scala.util.control.Breaks._
 
