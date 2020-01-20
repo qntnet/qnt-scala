@@ -1,21 +1,14 @@
 package qnt
 
-import java.io.{File, FileInputStream, FileOutputStream, FileWriter}
-import java.net.{HttpURLConnection, URL}
+import java.io.{File, FileOutputStream, FileWriter}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import java.util.Scanner
 
-import breeze.linalg.DenseMatrix
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.scala.{DefaultScalaModule, ScalaObjectMapper}
 import org.slf4j.LoggerFactory
-import qnt.bz.{DataFrame, DataIndexVector, Series}
-import ucar.ma2.DataType
-import ucar.nc2.{Attribute, NetcdfFile, NetcdfFileWriter, Variable}
+import qnt.bz.{DataFrame, DataIndexVector}
 
 import scala.collection.mutable
-import scala.util.control.NonFatal
 
 object data {
   def normalizeOutput(output: DataFrame[LocalDate, String, Double]): DataFrame[LocalDate, String, Double] = {
@@ -48,11 +41,11 @@ object data {
                    ) : List[StockInfo] = {
 
     val uri = s"assets?min_date=$minDate&max_date=$maxDate"
-    val dataBytes = loadWithRetry(uri)
+    val dataBytes = net.httpRequestWithRetry(baseUrl + uri)
     if(dataBytes == null) {
       return List.empty
     }
-    val lst = OBJECT_MAPPER.readValue[List[Map[String, Any]]](dataBytes)
+    val lst = net.OBJECT_MAPPER.readValue[List[Map[String, Any]]](dataBytes)
     lst.sortBy(i => i.getOrElse("last_point_id", "1900-01-01").asInstanceOf[String])
       .reverse
       .map(p => new StockInfo(p))
@@ -160,8 +153,8 @@ object data {
                      maxDate: LocalDate = LocalDate.now()
                    ) : List[IndexInfo] = {
     val uri = s"idx/list?min_date=$minDate&max_date=$maxDate"
-    val dataBytes = loadWithRetry(uri)
-    OBJECT_MAPPER.readValue[List[IndexInfo]](dataBytes)
+    val dataBytes = net.httpRequestWithRetry(baseUrl + uri)
+    net.OBJECT_MAPPER.readValue[List[IndexInfo]](dataBytes)
   }
 
   case class IndexInfo (id: String, name: String) {
@@ -175,8 +168,8 @@ object data {
     maxDate: LocalDate = LocalDate.now()
   ): DataFrame[LocalDate, String, Double] = {
     val params = Map("ids" -> ids, "min_date"-> minDate.toString, "max_date"-> maxDate.toString)
-    val resBytes = loadWithRetry("idx/data", params)
-    var resFrame = netcdf2DToFrames(resBytes)
+    val resBytes = net.httpRequestWithRetry(baseUrl + "idx/data", params)
+    var resFrame = netcdf.netcdf2DToFrames(resBytes)
 
     val sortedTime = resFrame.rowIdx.toIndexedSeq.sorted
     val sortedAsset = resFrame.colIdx.toIndexedSeq.sorted
@@ -209,8 +202,8 @@ object data {
       "max_date" -> maxDate.toString
     )
     while (go) {
-      val bytes = loadWithRetry("sec.gov/forms", params)
-      val p = OBJECT_MAPPER.readValue[List[Map[String,Any]]](bytes)
+      val bytes = net.httpRequestWithRetry(baseUrl + "sec.gov/forms", params)
+      val p = net.OBJECT_MAPPER.readValue[List[Map[String,Any]]](bytes)
       p.foreach(r => lst.addOne(new SecForm(r)))
       offset += p.length
       params("offset") = offset
@@ -318,10 +311,6 @@ object data {
   }
 
   private val LOG = LoggerFactory.getLogger(getClass)
-  private val RETRIES = if(System.getenv().keySet.contains("SUBMISSION_ID")) Int.MaxValue else 5
-  private val TIMEOUT = 60*1000
-  private val OBJECT_MAPPER = new ObjectMapper() with ScalaObjectMapper
-  OBJECT_MAPPER.registerModule(DefaultScalaModule)
   private val BATCH_LIMIT = 300000
 
   def loadStockDailyRawSeries
@@ -367,174 +356,14 @@ object data {
       "min_date" -> minDate.toString,
       "max_date" -> maxDate.toString
     )
-    val dataBytes = loadWithRetry(uri, params)
-    netcdf3DToFrames(dataBytes)
-  }
-
-  def netcdf3DToFrames(bytes: Array[Byte])
-  : Map[String,  DataFrame[LocalDate, String, Double]]
-    = {
-    val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
-
-    val vars = dataNetcdf.getVariables
-      .toArray(new Array[Variable](dataNetcdf.getVariables.size()))
-      .map(v=>(v.getShortName, v))
-      .toMap
-
-    val timeVar = vars("time")
-    val zeroDateStr = timeVar.getAttributes
-      .toArray(new Array[Attribute](timeVar.getAttributes.size()))
-      .filter(i=>i.getShortName == "units")(0)
-      .getStringValue
-
-    val zeroDate = LocalDate.parse(zeroDateStr.split(" since ")(1).split(" ")(0))
-    val timeRawArray = dataNetcdf.readSection("time").copyTo1DJavaArray().asInstanceOf[Array[Int]]
-    val timeArray = timeRawArray.map(i => intern(zeroDate.plusDays(i)))
-
-    var fieldVar = vars("field")
-    val fieldRawArray = dataNetcdf.readSection("field").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
-    val fieldArray = fieldRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
-
-    val assetVar = vars("asset")
-    val assetRawArray = dataNetcdf.readSection("asset").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
-    val assetArray = assetRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
-
-    // C-order of dimensions: field,time,asset
-    val values = dataNetcdf.readSection("__xarray_dataarray_variable__").copyTo1DJavaArray().asInstanceOf[Array[Double]]
-
-    val timeIdx = DataIndexVector.apply[LocalDate](timeArray)
-    val assetIdx = DataIndexVector[String](assetArray)
-    val valueMatrices = fieldArray.indices
-      .map(i => DenseMatrix.create(timeArray.length, assetArray.length, values, i * timeArray.length * assetArray.length, assetArray.length, true))
-      .toArray
-
-    var result = Map[String, DataFrame[LocalDate, String, Double]]()
-
-    for(fi <- fieldArray.indices) {
-      val field = fieldArray(fi)
-      val mat = valueMatrices(fi)
-      val frame = DataFrame[LocalDate, String, Double](timeIdx, assetIdx, mat)
-      result += (field -> frame)
-    }
-    result
-  }
-
-  def netcdf2DToFrames(bytes: Array[Byte]): DataFrame[LocalDate, String, Double] = {
-    val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
-
-    val vars = dataNetcdf.getVariables
-      .toArray(new Array[Variable](dataNetcdf.getVariables.size()))
-      .map(v=>(v.getShortName, v)).toMap
-
-    val timeVar = vars("time")
-    val zeroDateStr = timeVar.getAttributes
-      .toArray(new Array[Attribute](timeVar.getAttributes.size()))(0)
-      .getStringValue
-    val zeroDate = LocalDate.parse(zeroDateStr.split(" since ")(1).split(" ")(0))
-    val timeRawArray = dataNetcdf.readSection("time").copyTo1DJavaArray().asInstanceOf[Array[Int]]
-    val timeArray = timeRawArray.map(i => zeroDate.plusDays(i))
-
-    val assetVar = vars("asset")
-    val assetRawArray = dataNetcdf.readSection("asset").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
-    val assetArray = assetRawArray.map(i => new String(i.filter(c => c != '\u0000')))
-
-    // C-order of dimensions: time,asset
-    val values = dataNetcdf.readSection("__xarray_dataarray_variable__").copyTo1DJavaArray().asInstanceOf[Array[Double]]
-
-    val timeIdx = DataIndexVector[LocalDate](timeArray)
-    val assetIdx = DataIndexVector[String](assetArray)
-    val valueMatrix = DenseMatrix.create(timeArray.length, assetArray.length, values, 0, assetArray.length, true)
-
-    DataFrame[LocalDate, String, Double](timeIdx, assetIdx, valueMatrix)
-  }
-
-  def seriesToNetcdf(series: Series[LocalDate, Double]): Array[Byte] = {
-    val tmpFile = File.createTempFile("series-", ".nc")
-
-    try {
-      val f = NetcdfFileWriter.createNew(NetcdfFileWriter.Version.netcdf3, tmpFile.getAbsolutePath)
-      try {
-        f.addDimension(null, "time", series.idx.length)
-        val timeVar = f.addVariable(null, "time", DataType.INT, "time")
-        val zeroDate = series.idx(0)
-        timeVar.addAttribute(new Attribute("units", s"days since $zeroDate"))
-        timeVar.addAttribute(new Attribute("calendar", "gregorian"))
-
-        val dataVar = f.addVariable(null, "__xarray_dataarray_variable__", DataType.DOUBLE, "time")
-        dataVar.addAttribute(new Attribute("_FillValue", Double.NaN))
-
-        f.create()
-
-        val timeArr = series.idx.toArray.map(t => ChronoUnit.DAYS.between(zeroDate, t).intValue)
-        f.write(timeVar, ucar.ma2.Array.factory(timeArr))
-        f.write(dataVar, ucar.ma2.Array.factory(series.data.toArray))
-
-      } finally {
-        f.close()
-      }
-      val fis = new FileInputStream(tmpFile)
-      try {
-        fis.readAllBytes()
-      } finally {
-        fis.close()
-      }
-    } finally {
-      tmpFile.delete()
-    }
-  }
-
-  def dataFrameToNetcdf(df: DataFrame[LocalDate, String, Double]): Array[Byte] = {
-    val tmpFile = File.createTempFile("df-", ".nc")
-
-    try {
-      val f = NetcdfFileWriter.createNew(NetcdfFileWriter.Version.netcdf3, tmpFile.getAbsolutePath)
-      try {
-        f.addDimension(null, "time", df.rowIdx.length)
-        f.addDimension(null, "asset", df.colIdx.length)
-        val maxAssetLen = df.colIdx.map(s => s.length).max
-        val assetStrDim = "str" + maxAssetLen
-        f.addDimension(null, assetStrDim, maxAssetLen)
-
-        val timeVar = f.addVariable(null, "time", DataType.INT, "time")
-        val zeroDate = df.rowIdx(0)
-        timeVar.addAttribute(new Attribute("units", s"days since $zeroDate"))
-        timeVar.addAttribute(new Attribute("calendar", "gregorian"))
-
-        val assetVar = f.addVariable(null, "asset", DataType.CHAR, "asset " + assetStrDim)
-        assetVar.addAttribute(new Attribute("_Encoding", "utf-8"))
-
-        val dataVar = f.addVariable(null, "__xarray_dataarray_variable__", DataType.DOUBLE, "time asset")
-        dataVar.addAttribute(new Attribute("_FillValue", Double.NaN))
-
-        f.create()
-
-        val timeArr = df.rowIdx.toArray.map(t => ChronoUnit.DAYS.between(zeroDate, t).intValue)
-        f.write(timeVar, ucar.ma2.Array.factory(timeArr))
-        f.write(assetVar, ucar.ma2.Array.factory(df.colIdx.toArray.map(s => toCharSeqFxdSize(s, maxAssetLen))))
-        f.write(dataVar, ucar.ma2.Array.factory(
-          DataType.DOUBLE,
-          Array[Int](df.rowIdx.length, df.colIdx.length),
-          df.data.toDenseMatrix.t.toArray
-        ))
-
-      } finally {
-        f.close()
-      }
-      val fis = new FileInputStream(tmpFile)
-      try {
-        fis.readAllBytes()
-      } finally {
-        fis.close()
-      }
-    } finally {
-      tmpFile.delete()
-    }
+    val dataBytes = net.httpRequestWithRetry(baseUrl + uri, params)
+    netcdf.netcdf3DToFrames(dataBytes)
   }
 
   def writeOutput(df: DataFrame[LocalDate, String, Double]):Unit = {
     val normalized = normalizeOutput(df)
-    val bytes = dataFrameToNetcdf(normalized)
-    val gz = GzipUtils.gzipCompress(bytes)
+    val bytes = netcdf.dataFrameToNetcdf(normalized)
+    val gz = gzip.gzipCompress(bytes)
 
     val path = System.getenv().getOrDefault("OUTPUT_PATH", "fractions.nc.gz")
 
@@ -544,52 +373,6 @@ object data {
     } finally {
       w.close()
     }
-  }
-
-  private def toCharSeqFxdSize(str: String, size: Int):Array[Char] = {
-    var res = new Array[Char](size)
-    var charStr = str.toCharArray
-    Array.copy(charStr, 0, res, 0, charStr.length)
-    res
-  }
-
-  private def loadWithRetry(uri: String, dataObj: Any = null): Array[Byte] = {
-    val urlStr = baseUrl + uri
-    val url = new URL(urlStr)
-    for (t <- 1 to RETRIES) {
-      var exc: Exception = null
-      var conn: HttpURLConnection = null
-      try {
-        conn = url.openConnection().asInstanceOf[HttpURLConnection]
-        conn.setConnectTimeout(TIMEOUT)
-        conn.setReadTimeout(TIMEOUT)
-        conn.setDoOutput(dataObj != null)
-        conn.setRequestMethod(if(dataObj == null) "GET" else "POST")
-        conn.setUseCaches(false)
-        conn.setDoInput(true)
-        if(dataObj != null) {
-          val dataBytes = OBJECT_MAPPER.writeValueAsBytes(dataObj)
-          // conn.setRequestProperty("Content-Type", "application/json; utf-8")
-          conn.setRequestProperty("Content-Length", Integer.toString(dataBytes.length))
-          conn.getOutputStream.write(dataBytes)
-          conn.getOutputStream.flush()
-        }
-        val code = conn.getResponseCode
-        if(code == 404) {
-          return null
-        }
-        if(code != 200) {
-          throw new IllegalStateException(s"Wrong status code: $code")
-        }
-        val is = conn.getInputStream
-        return is.readAllBytes()
-      } catch {
-        case NonFatal(e) => LOG.warn(s"Download exception, URL: $urlStr", e)
-      } finally {
-        if (conn != null) conn.disconnect()
-      }
-    }
-    throw new IllegalStateException(s"Data was not loaded, URL: $urlStr")
   }
 
   private def baseUrl = {
@@ -654,43 +437,5 @@ object data {
 
   implicit private val localDateOrdering: Ordering[LocalDate] = Ordering.by(_.toEpochDay)
 
-  private object intern {
-    var internMap : mutable.HashMap[Any,Any] = null
-    var miss = 0
-    var hit = 0
-
-    def ctx[R](fun:  => R) = {
-      if(internMap != null) {
-        fun
-      } else {
-        try{
-          hit = 0
-          miss = 0
-          internMap = mutable.HashMap[Any,Any]()
-          fun
-        } finally {
-          internMap.clear()
-          internMap = null
-          LOG.info(s"intern hit = $hit, miss= $miss")
-        }
-      }
-    }
-
-    def apply[T](value : T):T = {
-      if(internMap == null) {
-        miss += 1
-        value
-      }else {
-        if(internMap.contains(value)) {
-          hit += 1
-          internMap(value).asInstanceOf[T]
-        } else {
-          miss += 1
-          internMap(value) = value
-          value
-        }
-      }
-    }
-  }
 }
 

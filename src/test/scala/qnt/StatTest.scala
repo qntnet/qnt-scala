@@ -35,9 +35,9 @@ class StatTest extends FunSuite {
     //println(stats.calcCorrelation(rr))
 
 
-    var ob = data.dataFrameToNetcdf(output)
+    var ob = netcdf.dataFrameToNetcdf(output)
 
-    var o2 = data.netcdf2DToFrames(ob)
+    var o2 = netcdf.netcdf2DToFrames(ob)
 
     print(o2)
 
