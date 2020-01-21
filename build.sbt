@@ -8,9 +8,33 @@ organization := "ai.quantnet"
 organizationName := "QuantNet, LLC."
 organizationHomepage := Some(url("http://quantnet.ai"))
 
-publishTo := Some("Sonatype Snapshots Nexus" at "https://oss.sonatype.org/content/repositories/snapshots")
+scmInfo := Some(
+  ScmInfo(
+    url("https://github.com/qntnet/qnt-scala"),
+    "scm:git@github.com:qntnet/qnt-scala.git"
+  )
+)
+developers := List(
+  Developer(
+    id    = "dgolovin.quantnet",
+    name  = "Dmitry Golovin",
+    email = "golovin@quantneet.ai",
+    url   = url("http://github.com/quantnet-golovin")
+  )
+)
 
-version := "0.1-SNAPSHOT"
+publishMavenStyle := true
+
+publishTo := {
+  val nexus = "https://oss.sonatype.org/"
+  if (isSnapshot.value) Some("snapshots" at nexus + "content/repositories/snapshots")
+  else Some("releases" at nexus + "service/local/staging/deploy/maven2")
+}
+
+publishConfiguration := publishConfiguration.value.withOverwrite(true)
+publishLocalConfiguration := publishLocalConfiguration.value.withOverwrite(true)
+
+version := "0.1"
 
 scalaVersion := "2.13.1"
 
@@ -26,5 +50,3 @@ libraryDependencies +=  "org.scalanlp" %% "breeze" % "1.0"
 //libraryDependencies += "org.scalanlp" %% "breeze-natives" % "1.0"
 
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.8" % "test"
-
-//addSbtPlugin("com.jsuereth" % "sbt-pgp" % "1.1.1")
