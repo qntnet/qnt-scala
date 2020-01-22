@@ -1,9 +1,11 @@
 package ai.quantnet
 
+import java.io.ByteArrayOutputStream
 import java.net.{HttpURLConnection, URL}
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.scala.{DefaultScalaModule, ScalaObjectMapper}
+import org.apache.commons.io.IOUtils
 import org.slf4j.LoggerFactory
 
 import scala.util.control.NonFatal
@@ -53,7 +55,9 @@ object net {
           throw new IllegalStateException(s"Wrong status code: $code")
         }
         val is = conn.getInputStream
-        is.readAllBytes()
+        val result = new ByteArrayOutputStream()
+        IOUtils.copy(is, result)
+        result.toByteArray
       } finally {
         if (conn != null) conn.disconnect()
       }

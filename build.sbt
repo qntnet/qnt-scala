@@ -34,7 +34,7 @@ publishTo := {
 publishConfiguration := publishConfiguration.value.withOverwrite(true)
 publishLocalConfiguration := publishLocalConfiguration.value.withOverwrite(true)
 
-version := "0.2"
+version := "0.7"
 
 scalaVersion := "2.13.1"
 
@@ -50,3 +50,7 @@ libraryDependencies +=  "org.scalanlp" %% "breeze" % "1.0"
 //libraryDependencies += "org.scalanlp" %% "breeze-natives" % "1.0"
 
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.0.8" % "test"
+
+libraryDependencies += "commons-io" % "commons-io" % "2.6"
+
+javacOptions ++= Seq("-source", "1.8", "-target", "1.8")

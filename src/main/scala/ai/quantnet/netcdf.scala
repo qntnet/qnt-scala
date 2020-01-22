@@ -1,11 +1,12 @@
 package ai.quantnet
 
-import java.io.{File, FileInputStream}
+import java.io.{ByteArrayOutputStream, File, FileInputStream}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 import ai.quantnet.bz.{DataFrame, DataIndexVector, Series}
 import breeze.linalg.DenseMatrix
+import org.apache.commons.io.IOUtils
 import ucar.ma2.DataType
 import ucar.nc2.{Attribute, NetcdfFile, NetcdfFileWriter, Variable}
 
@@ -56,7 +57,9 @@ object netcdf {
       }
       val fis = new FileInputStream(tmpFile)
       try {
-        fis.readAllBytes()
+        val result = new ByteArrayOutputStream()
+        IOUtils.copy(fis, result)
+        result.toByteArray
       } finally {
         fis.close()
       }
@@ -91,7 +94,9 @@ object netcdf {
       }
       val fis = new FileInputStream(tmpFile)
       try {
-        fis.readAllBytes()
+        val result = new ByteArrayOutputStream()
+        IOUtils.copy(fis, result)
+        result.toByteArray
       } finally {
         fis.close()
       }
@@ -120,7 +125,8 @@ object netcdf {
     val assetArray = assetRawArray.map(i => new String(i.filter(c => c != '\u0000')))
 
     // C-order of dimensions: time,asset
-    val values = dataNetcdf.readSection("__xarray_dataarray_variable__").copyTo1DJavaArray().asInstanceOf[Array[Double]]
+    val varName = vars.keys.filter(_!="time").filter(_!="field")/*.filter(_!="asset")*/.toArray.apply(0)
+    val values = dataNetcdf.readSection(varName).copyTo1DJavaArray().asInstanceOf[Array[Double]]
 
     val timeIdx = DataIndexVector[LocalDate](timeArray)
     val assetIdx = DataIndexVector[String](assetArray)
@@ -158,7 +164,8 @@ object netcdf {
     val assetArray = assetRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
 
     // C-order of dimensions: field,time,asset
-    val values = dataNetcdf.readSection("__xarray_dataarray_variable__").copyTo1DJavaArray().asInstanceOf[Array[Double]]
+    val varName = vars.keys.filter(_!="time").filter(_!="field").filter(_!="asset").toArray.apply(0)
+    val values = dataNetcdf.readSection(varName).copyTo1DJavaArray().asInstanceOf[Array[Double]]
 
     val timeIdx = DataIndexVector.apply[LocalDate](timeArray)
     val assetIdx = DataIndexVector[String](assetArray)
