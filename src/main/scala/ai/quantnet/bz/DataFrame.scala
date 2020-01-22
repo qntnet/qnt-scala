@@ -160,13 +160,13 @@ class DataFrame[R, C, @specialized(Double, Int, Float, Long) V]
     : DataFrame[R, C, V] = iloc(colIdx.locRange(start, end, step, keepStart, keepEnd, round).slices)
 
 
-    def iget(ri: Int): Series[R, V] = {
+    def iget(ci: Int): Series[R, V] = {
       var d = data match {
-        case d: DenseMatrix[V] => d.apply(ri, ::)
-        case d: SliceMatrix[Int, Int, V] => d.apply(ri, ::)
+        case d: DenseMatrix[V] => d.apply(::, ci)
+        case d: SliceMatrix[Int, Int, V] => d.apply(::, ci)
         case _ => ???
       }
-      Series(rowIdx, d.t)
+      Series(rowIdx, d)
     }
 
     def get(c: C): Series[R, V] = {

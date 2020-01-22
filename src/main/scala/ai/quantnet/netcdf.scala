@@ -125,7 +125,7 @@ object netcdf {
     val assetArray = assetRawArray.map(i => new String(i.filter(c => c != '\u0000')))
 
     // C-order of dimensions: time,asset
-    val varName = vars.keys.filter(_!="time").filter(_!="field")/*.filter(_!="asset")*/.toArray.apply(0)
+    val varName = vars.keys.filter(vars(_).getDataType == DataType.DOUBLE).toArray.apply(0)
     val values = dataNetcdf.readSection(varName).copyTo1DJavaArray().asInstanceOf[Array[Double]]
 
     val timeIdx = DataIndexVector[LocalDate](timeArray)
@@ -164,7 +164,7 @@ object netcdf {
     val assetArray = assetRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
 
     // C-order of dimensions: field,time,asset
-    val varName = vars.keys.filter(_!="time").filter(_!="field").filter(_!="asset").toArray.apply(0)
+    val varName = vars.keys.filter(vars(_).getDataType == DataType.DOUBLE).filter(_!="time").toArray.apply(0)
     val values = dataNetcdf.readSection(varName).copyTo1DJavaArray().asInstanceOf[Array[Double]]
 
     val timeIdx = DataIndexVector.apply[LocalDate](timeArray)

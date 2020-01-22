@@ -30,6 +30,8 @@ class StatTest extends FunSuite {
 
     val s = stats.calcStats(dataSet, output)
 
+    val srr = s.colOps.get(stats.fields.relativeReturn)
+
     println(s.toString(headRows = 20))
 
     //println(stats.calcCorrelation(rr))
