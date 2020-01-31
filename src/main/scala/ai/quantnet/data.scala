@@ -41,7 +41,7 @@ object data {
                    ) : List[StockInfo] = {
 
     val uri = s"/assets?min_date=$minDate&max_date=$maxDate"
-    val dataBytes = net.httpRequestWithRetry(baseUrl + uri)
+    val dataBytes = net.httpRequestWithRetry(toUrl(uri))
     if(dataBytes == null) {
       return List.empty
     }
@@ -153,7 +153,7 @@ object data {
                      maxDate: LocalDate = LocalDate.now()
                    ) : List[IndexInfo] = {
     val uri = s"/idx/list?min_date=$minDate&max_date=$maxDate"
-    val dataBytes = net.httpRequestWithRetry(baseUrl + uri)
+    val dataBytes = net.httpRequestWithRetry(toUrl(uri))
     net.OBJECT_MAPPER.readValue[List[IndexInfo]](dataBytes)
   }
 
@@ -168,7 +168,7 @@ object data {
     maxDate: LocalDate = LocalDate.now()
   ): DataFrame[LocalDate, String, Double] = {
     val params = Map("ids" -> ids, "min_date"-> minDate.toString, "max_date"-> maxDate.toString)
-    val resBytes = net.httpRequestWithRetry(baseUrl + "/idx/data", params)
+    val resBytes = net.httpRequestWithRetry(toUrl("/idx/data"), params)
     var resFrame = netcdf.netcdf2DToFrames(resBytes)
 
     val sortedTime = resFrame.rowIdx.toIndexedSeq.sorted
@@ -202,7 +202,7 @@ object data {
       "max_date" -> maxDate.toString
     )
     while (go) {
-      val bytes = net.httpRequestWithRetry(baseUrl + "/sec.gov/forms", params)
+      val bytes = net.httpRequestWithRetry(toUrl("/sec.gov/forms"), params)
       val p = net.OBJECT_MAPPER.readValue[List[Map[String,Any]]](bytes)
       p.foreach(r => lst.addOne(new SecForm(r)))
       offset += p.length
@@ -356,7 +356,7 @@ object data {
       "min_date" -> minDate.toString,
       "max_date" -> maxDate.toString
     )
-    val dataBytes = net.httpRequestWithRetry(baseUrl + uri, params)
+    val dataBytes = net.httpRequestWithRetry(toUrl(uri), params)
     netcdf.netcdf3DToFrames(dataBytes)
   }
 
@@ -376,8 +376,11 @@ object data {
   }
 
   private def baseUrl = {
-    System.getenv().getOrDefault("DATA_BASE_URL", "http://127.0.0.1:8000")
+    System.getenv().getOrDefault("DATA_BASE_URL", "http://127.0.0.1:8000/")
   }
+
+  private def toUrl(uri: String): String
+  = if(baseUrl.last == '/') (baseUrl.substring(0, baseUrl.length - 1) + uri) else (baseUrl + uri)
 
   private val clientToServerIdMapping = mutable.HashMap[String,String]()
   private val serverToClientIdMapping = mutable.HashMap[String,String]()

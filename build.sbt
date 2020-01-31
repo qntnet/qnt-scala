@@ -34,7 +34,7 @@ publishTo := {
 publishConfiguration := publishConfiguration.value.withOverwrite(true)
 publishLocalConfiguration := publishLocalConfiguration.value.withOverwrite(true)
 
-version := "0.7"
+version := "0.8"
 
 scalaVersion := "2.13.1"
 
