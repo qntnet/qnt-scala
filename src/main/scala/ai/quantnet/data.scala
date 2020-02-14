@@ -323,7 +323,7 @@ object data {
     if(maxDate.equals(LocalDate.now())) {
       val path = System.getenv("LAST_DATA_PATH")
       if(path != null) {
-        var fw = new FileWriter(path)
+        val fw = new FileWriter(path)
         fw.write("last")
         fw.close()
       }
