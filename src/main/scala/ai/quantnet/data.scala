@@ -319,6 +319,16 @@ object data {
     minDate: LocalDate = LocalDate.of(2007, 1, 1),
     maxDate: LocalDate = LocalDate.now()
   ) : Map[String,  DataFrame[LocalDate, String, Double]] = {
+
+    if(maxDate.equals(LocalDate.now())) {
+      val path = System.getenv("LAST_DATA_PATH")
+      if(path != null) {
+        var fw = new FileWriter(path)
+        fw.write("last")
+        fw.close()
+      }
+    }
+
     var days = math.max(1, ChronoUnit.DAYS.between(minDate, maxDate).asInstanceOf[Int])
     var maxChunkSize = BATCH_LIMIT / days
 
