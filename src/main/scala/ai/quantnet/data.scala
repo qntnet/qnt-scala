@@ -371,7 +371,10 @@ object data {
   }
 
   def writeOutput(df: DataFrame[LocalDate, String, Double]):Unit = {
-    val normalized = normalizeOutput(df)
+    val colIdx = DataIndexVector(df.colIdx.map(getServerId))
+    val dfServerIds = df.withIdx(df.rowIdx, colIdx)
+    val normalized = normalizeOutput(dfServerIds)
+    normalized.toIndexedSeq
     val bytes = netcdf.dataFrameToNetcdf(normalized)
     val gz = gzip.gzipCompress(bytes)
 
