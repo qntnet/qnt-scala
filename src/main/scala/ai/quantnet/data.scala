@@ -417,7 +417,7 @@ object data {
     scanner.close()
   } else {
     val writer = new FileWriter(idMappingFile)
-    writer.write("server_id,client_id\n")
+    writer.write("server_id,user_id\n")
     writer.close()
   }
 
