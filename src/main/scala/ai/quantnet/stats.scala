@@ -4,6 +4,7 @@ import java.time.LocalDate
 import java.util.Base64
 
 import ai.quantnet.bz.{Align, DataFrame, Series}
+import spire.ClassTag
 
 import scala.util.control.Breaks._
 
@@ -12,11 +13,11 @@ import scala.util.control.Breaks._
 object stats {
   val EPS:Double = 0.0000001
 
-  def calcTr(
-                  high: DataFrame[LocalDate, String, Double],
-                  low: DataFrame[LocalDate, String, Double],
-                  close: DataFrame[LocalDate, String, Double]
-                ): DataFrame[LocalDate, String, Double] = {
+  def calcTr[T](
+                  high: DataFrame[T, String, Double],
+                  low: DataFrame[T, String, Double],
+                  close: DataFrame[T, String, Double]
+                ): DataFrame[T, String, Double] = {
     val res = close.fillLike(Double.NaN)
     res.data.foreachKey(e => {
       val l = low.data(e)
@@ -31,7 +32,7 @@ object stats {
     res
   }
 
-  def calcSma(d: DataFrame[LocalDate, String, Double], period: Int): DataFrame[LocalDate, String, Double] = {
+  def calcSma[T](d: DataFrame[T, String, Double], period: Int): DataFrame[T, String, Double] = {
     // sma without nan correction
     val res = d.fillLike(Double.NaN)
     for(c <- d.colIdx.indices; r <- period-1 to d.rowIdx.indices.last) {
@@ -45,21 +46,21 @@ object stats {
     res
   }
 
-  def calcSlippage
+  def calcSlippage[T]
   (
-    high: DataFrame[LocalDate, String, Double],
-    low: DataFrame[LocalDate, String, Double],
-    close: DataFrame[LocalDate, String, Double],
+    high: DataFrame[T, String, Double],
+    low: DataFrame[T, String, Double],
+    close: DataFrame[T, String, Double],
     period: Int = 14,
     fract: Double = 0.05d
-  ): DataFrame[LocalDate, String, Double] = {
+  ): DataFrame[T, String, Double] = {
     var res = calcTr(high, low, close)
     res = calcSma(res, period)
     res.data :*= fract
     res.ffillRows(Double.NaN)
   }
 
-  def calcRelativeReturn(
+  def calcRelativeReturn[T:ClassTag](
                            /*inOpen: DataFrame[LocalDate, String, Double],
                            inHigh: DataFrame[LocalDate, String, Double],
                            inLow: DataFrame[LocalDate, String, Double],
@@ -67,24 +68,24 @@ object stats {
                            inDivs: DataFrame[LocalDate, String, Double],
                            inLiquid: DataFrame[LocalDate, String, Double],
                            */
-                           inData: Map[String, DataFrame[LocalDate, String, Double]],
-                           inWeights: DataFrame[LocalDate, String, Double],
+                           inData: Map[String, DataFrame[T, String, Double]],
+                           inWeights: DataFrame[T, String, Double],
                            slippageFactor: Double = 0.05d
-                         ): Series[LocalDate, Double] = {
+                         )(implicit ord:Ordering[T]): Series[T, Double] = {
 
     val slippageWhole = calcSlippage(inData(data.fields.high), inData(data.fields.low), inData(data.fields.close), fract=slippageFactor)
 
     val firstRowSlippage = slippageWhole.firstNotEmptyRow(Double.NaN)
     val firstRowWeight = inWeights.firstNotEmptyRow(Double.NaN)
-    val firstRow = if(firstRowSlippage.compareTo(firstRowWeight) > 0) firstRowSlippage else firstRowWeight
+    val firstRow = if(ord.gt(firstRowSlippage, firstRowWeight)) firstRowSlippage else firstRowWeight
 
     val slippage = slippageWhole.rowOps.locRange(firstRow, slippageWhole.rowIdx.last, 1).copy
 
     val weights = data.normalizeOutput(inWeights).shiftRows(1, 0).align(slippage, Align.right, Double.NaN)
     val open = inData(data.fields.open).align(slippage, Align.right, Double.NaN)
     val openff = open.ffillRows(Double.NaN).fillMissed(Double.NaN, 0d)
-    val divs = inData(data.fields.divs).align(slippage, Align.right, Double.NaN).fillMissed(Double.NaN, 0)
-    val liquid = inData(data.fields.is_liquid).align(slippage, Align.right, Double.NaN).fillMissed(Double.NaN, 0d)
+    val divs = inData.getOrElse(data.fields.divs, openff.fillLike(0d)).align(slippage, Align.right, Double.NaN).fillMissed(Double.NaN, 0)
+    val liquid = inData.getOrElse(data.fields.is_liquid, open).align(slippage, Align.right, Double.NaN).fillMissed(Double.NaN, 0d)
     val close = inData(data.fields.close).align(slippage, Align.right, Double.NaN)
     val closeff = close.ffillRows(Double.NaN).fillMissed(Double.NaN, 0d)
 
@@ -215,21 +216,21 @@ object stats {
     stddev
   }
 
-  def calcVolatilityAnnualized(
-                                relativeReturns: Series[LocalDate, Double],
+  def calcVolatilityAnnualized[T](
+                                relativeReturns: Series[T, Double],
                                 maxPeriods: Int = 252,
                                 minPeriods: Int = 2
-                              ): Series[LocalDate, Double] = {
+                              ): Series[T, Double] = {
     var volatility = calcStdDev(relativeReturns, maxPeriods, minPeriods)
     volatility.data :*= math.sqrt(252) // annualization
     volatility
   }
 
-  def calcMeanReturnAnnualized(
-                                relativeReturns: Series[LocalDate, Double],
+  def calcMeanReturnAnnualized[T](
+                                relativeReturns: Series[T, Double],
                                 maxPeriods: Int = 252,
                                 minPeriods: Int = 2
-                              ): Series[LocalDate, Double] = {
+                              ): Series[T, Double] = {
     val mr = relativeReturns.fillLike(Double.NaN)
     for(i <- minPeriods - 1 to relativeReturns.idx.indices.last) {
       val start = math.max(0, (i - maxPeriods + 1))
@@ -247,11 +248,11 @@ object stats {
     mr
   }
 
-  def calcSharpeRatio(
-                       relativeReturns: Series[LocalDate, Double],
+  def calcSharpeRatio[T](
+                       relativeReturns: Series[T, Double],
                        maxPeriods: Int = 252,
                        minPeriods: Int = 2
-                   ): Series[LocalDate, Double] = {
+                   ): Series[T, Double] = {
     val volatility = calcVolatilityAnnualized(relativeReturns, maxPeriods, minPeriods)
     val meanReturn = calcMeanReturnAnnualized(relativeReturns, maxPeriods, minPeriods)
     val sharpeRatio = relativeReturns.fillLike(Double.NaN)
@@ -261,7 +262,7 @@ object stats {
     sharpeRatio
   }
 
-  def calcEquity(relativeReturns: Series[LocalDate, Double]): Series[LocalDate, Double] = {
+  def calcEquity[T](relativeReturns: Series[T, Double]): Series[T, Double] = {
     val result = relativeReturns.fillLike(Double.NaN)
     var equity = 1d
     for(i <- relativeReturns.idx.indices) {
@@ -271,7 +272,7 @@ object stats {
     result
   }
 
-  def calcUnderwater(equity: Series[LocalDate, Double]): Series[LocalDate, Double] = {
+  def calcUnderwater[T](equity: Series[T, Double]): Series[T, Double] = {
     var maxEquity = 1d
     val result = equity.fillLike(Double.NaN)
     for(i <- equity.idx.indices) {
@@ -282,7 +283,7 @@ object stats {
     result
   }
 
-  def calcMaxDrawdown(underwater: Series[LocalDate, Double]): Series[LocalDate, Double] = {
+  def calcMaxDrawdown[T](underwater: Series[T, Double]): Series[T, Double] = {
     var maxDD = 0d
     val result = underwater.fillLike(Double.NaN)
     for(i <- underwater.idx.indices) {
@@ -292,7 +293,7 @@ object stats {
     result
   }
 
-  def calcBias(inWeight: DataFrame[LocalDate, String, Double]): Series[LocalDate, Double] = {
+  def calcBias[T:Ordering:ClassTag](inWeight: DataFrame[T, String, Double]): Series[T, Double] = {
     val weight = data.normalizeOutput(inWeight)
     val b = Series.fill(weight.rowIdx, Double.NaN)
     for(ri <- weight.rowIdx.indices) {
@@ -344,7 +345,7 @@ object stats {
     DataFrame.fromSeriesColumns(sectors.iterator.toSeq.sortBy(_._1))
   }
 
-  def calcInstruments(weights: DataFrame[LocalDate, String, Double]): Series[LocalDate, Double] = {
+  def calcInstruments[T:ClassTag](weights: DataFrame[T, String, Double]): Series[T, Double] = {
     val icnt = weights.fillMissed(Double.NaN, 0d)
     for(ci <- weights.colIdx.indices; ri <- 1 to weights.rowIdx.indices.last) {
       icnt.data.update(ri, ci, if(icnt.data(ri, ci) != 0 || icnt.data(ri-1, ci) != 0) 1d else 0d)
@@ -360,12 +361,12 @@ object stats {
     result
   }
 
-  def calcAvgTurnover(
-                       inOpen: DataFrame[LocalDate, String, Double],
-                       inWeights: DataFrame[LocalDate, String, Double],
-                       inEquity: Series[LocalDate, Double],
+  def calcAvgTurnover[T:Ordering:ClassTag](
+                       inOpen: DataFrame[T, String, Double],
+                       inWeights: DataFrame[T, String, Double],
+                       inEquity: Series[T, Double],
                        maxPeriods: Int = 252, minPeriods: Int = 1,
-                     ): Series[LocalDate, Double] = {
+                     ): Series[T, Double] = {
     val W = data.normalizeOutput(inWeights.align(inEquity.idx, inWeights.colIdx, 0d)).shiftRows(1, 0)
     val pW = W.shiftRows(1, 0)
 
@@ -390,13 +391,13 @@ object stats {
     calcSma(turnover, maxPeriods, minPeriods)
   }
 
-  def calcStats(
-                 inData: Map[String, DataFrame[LocalDate, String, Double]],
-                 inWeights: DataFrame[LocalDate, String, Double],
+  def calcStats[T:Ordering:ClassTag](
+                 inData: Map[String, DataFrame[T, String, Double]],
+                 inWeights: DataFrame[T, String, Double],
                  slippageFactor: Double = 0.05d,
                  maxPeriods:Int = 252*3,
                  minPeriods:Int = 2
-               ):  DataFrame[LocalDate, String, Double] =  {
+               ):  DataFrame[T, String, Double] =  {
     val relativeReturns = calcRelativeReturn(
       inData,
       inWeights,
