@@ -6,6 +6,12 @@ import org.scalatest.FunSuite
 
 class DataTest extends FunSuite {
 
+  test("loadCruptocurrency") {
+    val d = data.loadCryptocurrencyHourlySeries()
+    print(d)
+    assert(d.nonEmpty)
+  }
+
   test("loadStockList") {
     val stocks = data.loadStockList()
     assert(stocks.nonEmpty)

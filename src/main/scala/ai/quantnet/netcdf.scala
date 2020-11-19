@@ -1,12 +1,13 @@
 package ai.quantnet
 
 import java.io.{ByteArrayOutputStream, File, FileInputStream}
-import java.time.LocalDate
-import java.time.temporal.ChronoUnit
+import java.time.temporal.{ChronoUnit, Temporal}
+import java.time.{LocalDate, LocalDateTime}
 
 import ai.quantnet.bz.{DataFrame, DataIndexVector, Series}
 import breeze.linalg.DenseMatrix
 import org.apache.commons.io.IOUtils
+import spire.ClassTag
 import ucar.ma2.DataType
 import ucar.nc2.{Attribute, NetcdfFile, NetcdfFileWriter, Variable}
 
@@ -18,7 +19,7 @@ object netcdf {
     res
   }
 
-  def dataFrameToNetcdf(df: DataFrame[LocalDate, String, Double]): Array[Byte] = {
+  def dataFrameToNetcdf[T<:Temporal:ClassTag](df: DataFrame[T, String, Double]): Array[Byte] = {
     val tmpFile = File.createTempFile("df-", ".nc")
 
     try {
@@ -105,7 +106,7 @@ object netcdf {
     }
   }
 
-  def netcdf2DToFrames(bytes: Array[Byte]): DataFrame[LocalDate, String, Double] = {
+  def netcdf2DToDailyFrames(bytes: Array[Byte]): DataFrame[LocalDate, String, Double] = {
     val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
 
     val vars = dataNetcdf.getVariables
@@ -135,7 +136,37 @@ object netcdf {
     DataFrame[LocalDate, String, Double](timeIdx, assetIdx, valueMatrix)
   }
 
-  def netcdf3DToFrames(bytes: Array[Byte])
+  def netcdf2DToHourlyFrames(bytes: Array[Byte]): DataFrame[LocalDateTime, String, Double] = {
+    val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
+
+    val vars = dataNetcdf.getVariables
+      .toArray(new Array[Variable](dataNetcdf.getVariables.size()))
+      .map(v=>(v.getShortName, v)).toMap
+
+    val timeVar = vars("time")
+    val zeroDateStr = timeVar.getAttributes
+      .toArray(new Array[Attribute](timeVar.getAttributes.size()))(0)
+      .getStringValue
+    val zeroDate = LocalDateTime.parse(zeroDateStr.split(" since ")(1).split(" ", 1)(0).replace(' ', 'T'))
+    val timeRawArray = dataNetcdf.readSection("time").copyTo1DJavaArray().asInstanceOf[Array[Int]]
+    val timeArray = timeRawArray.map(i => zeroDate.plusHours(i))
+
+    val assetVar = vars("asset")
+    val assetRawArray = dataNetcdf.readSection("asset").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
+    val assetArray = assetRawArray.map(i => new String(i.filter(c => c != '\u0000')))
+
+    // C-order of dimensions: time,asset
+    val varName = vars.keys.filter(vars(_).getDataType == DataType.DOUBLE).toArray.apply(0)
+    val values = dataNetcdf.readSection(varName).copyTo1DJavaArray().asInstanceOf[Array[Double]]
+
+    val timeIdx = DataIndexVector[LocalDateTime](timeArray)
+    val assetIdx = DataIndexVector[String](assetArray)
+    val valueMatrix = DenseMatrix.create(timeArray.length, assetArray.length, values, 0, assetArray.length, true)
+
+    DataFrame[LocalDateTime, String, Double](timeIdx, assetIdx, valueMatrix)
+  }
+
+  def netcdf3DToDailyFrames(bytes: Array[Byte])
   : Map[String,  DataFrame[LocalDate, String, Double]]
     = intern {
     val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
@@ -179,6 +210,55 @@ object netcdf {
       val field = fieldArray(fi)
       val mat = valueMatrices(fi)
       val frame = DataFrame[LocalDate, String, Double](timeIdx, assetIdx, mat)
+      result += (field -> frame)
+    }
+    result
+  }
+
+  def netcdf3DToHourlyFrames(bytes: Array[Byte])
+  : Map[String,  DataFrame[LocalDateTime, String, Double]]
+  = intern {
+    val dataNetcdf = NetcdfFile.openInMemory("data", bytes)
+
+    val vars = dataNetcdf.getVariables
+      .toArray(new Array[Variable](dataNetcdf.getVariables.size()))
+      .map(v=>(v.getShortName, v))
+      .toMap
+
+    val timeVar = vars("time")
+    val zeroDateStr = timeVar.getAttributes
+      .toArray(new Array[Attribute](timeVar.getAttributes.size()))
+      .filter(i=>i.getShortName == "units")(0)
+      .getStringValue
+
+    val zeroDate = LocalDateTime.parse(zeroDateStr.split(" since ")(1).split(" ",1)(0).replace(' ', 'T'))
+    val timeRawArray = dataNetcdf.readSection("time").copyTo1DJavaArray().asInstanceOf[Array[Int]]
+    val timeArray = timeRawArray.map(i => intern(zeroDate.plusHours(i)))
+
+    var fieldVar = vars("field")
+    val fieldRawArray = dataNetcdf.readSection("field").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
+    val fieldArray = fieldRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
+
+    val assetVar = vars("asset")
+    val assetRawArray = dataNetcdf.readSection("asset").copyToNDJavaArray().asInstanceOf[Array[Array[Char]]]
+    val assetArray = assetRawArray.map(i => intern(new String(i.filter(c => c != '\u0000'))))
+
+    // C-order of dimensions: field,time,asset
+    val varName = vars.keys.filter(vars(_).getDataType == DataType.DOUBLE).filter(_!="time").toArray.apply(0)
+    val values = dataNetcdf.readSection(varName).copyTo1DJavaArray().asInstanceOf[Array[Double]]
+
+    val timeIdx = DataIndexVector.apply(timeArray)
+    val assetIdx = DataIndexVector[String](assetArray)
+    val valueMatrices = fieldArray.indices
+      .map(i => DenseMatrix.create(timeArray.length, assetArray.length, values, i * timeArray.length * assetArray.length, assetArray.length, true))
+      .toArray
+
+    var result = Map[String, DataFrame[LocalDateTime, String, Double]]()
+
+    for(fi <- fieldArray.indices) {
+      val field = fieldArray(fi)
+      val mat = valueMatrices(fi)
+      val frame = DataFrame[LocalDateTime, String, Double](timeIdx, assetIdx, mat)
       result += (field -> frame)
     }
     result

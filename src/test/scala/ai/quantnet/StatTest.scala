@@ -1,6 +1,6 @@
 package ai.quantnet
 
-import java.time.LocalDate
+import java.time.LocalDateTime
 
 import org.scalatest.FunSuite
 
@@ -8,11 +8,11 @@ class StatTest extends FunSuite {
 
   test("bnh") {
 
-    val dataSet = data.loadStockDailySeries(
-      minDate = LocalDate.of(2015, 1, 1),
-      maxDate = LocalDate.of(2018, 1, 1),
+    val dataSet = data.loadCryptocurrencyHourlySeries(
+      minDate = LocalDateTime.of(2015, 1, 1,0,0,0),
+     // maxDate = LocalDateTime.of(2018, 1, 1,0,0,0),
     )
-    var output = dataSet(data.fields.is_liquid).copy
+    var output = dataSet(data.fields.close).copy
     output = data.normalizeOutput(output)
     output.data :*= 1d
 
@@ -36,14 +36,14 @@ class StatTest extends FunSuite {
 
     //println(stats.calcCorrelation(rr))
 
+//
+//    var ob = netcdf.dataFrameToNetcdf(output)
+//
+//    var o2 = netcdf.netcdf2DToDailyFrames(ob)
+//
+//    print(o2)
 
-    var ob = netcdf.dataFrameToNetcdf(output)
-
-    var o2 = netcdf.netcdf2DToFrames(ob)
-
-    print(o2)
-
-    data.writeOutput(output)
+    //data.writeOutput(output)
   }
 
 }

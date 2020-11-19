@@ -1,20 +1,21 @@
 package ai.quantnet
 
 import java.io.{File, FileOutputStream, FileWriter}
-import java.time.LocalDate
-import java.time.temporal.ChronoUnit
+import java.time.temporal.{ChronoUnit, Temporal}
+import java.time.{LocalDate, LocalDateTime, ZoneOffset}
 import java.util.Scanner
 
 import ai.quantnet.bz.{DataFrame, DataIndexVector}
 import org.slf4j.LoggerFactory
+import spire.ClassTag
 
 import scala.collection.mutable
 
 object data {
-  def normalizeOutput(output: DataFrame[LocalDate, String, Double]): DataFrame[LocalDate, String, Double] = {
-    val assets = output.colIdx.toIndexedSeq.sortBy(i=>i)
+  def normalizeOutput[T:Ordering:ClassTag](output: DataFrame[T, String, Double]): DataFrame[T, String, Double] = {
+    val assets = output.colIdx.toIndexedSeq.sorted
     val assetIdx = DataIndexVector.apply(assets, true, true, false)
-    val time = output.rowIdx.toIndexedSeq.sortBy(i=>i)
+    val time = output.rowIdx.toIndexedSeq.sorted
     val timeIdx = DataIndexVector.apply(time, true, true, false)
     val result = output.align(timeIdx, assetIdx, Double.NaN)
 
@@ -33,6 +34,29 @@ object data {
       }
     }
     result
+  }
+
+  def loadCryptocurrencyHourlySeries(
+                                      minDate: LocalDateTime = LocalDateTime.of(2007, 1, 1, 0,0,0),
+                                      maxDate: LocalDateTime = LocalDateTime.now()
+                                    ): Map[String, DataFrame[LocalDateTime, String, Double]] = {
+    val params = Map("min_date"-> minDate.toString, "max_date"-> maxDate.toString)
+
+    val minS = minDate.toString.split(":")(0)
+    val maxS = maxDate.toString.split(":")(0)
+
+    val resBytes = net.httpRequestWithRetry(toUrl(s"/crypto?min_date=${minS}&max_date=${maxS}"))
+    var resFrames = netcdf.netcdf3DToHourlyFrames(resBytes)
+
+    resFrames.map(e => {
+      var resFrame = e._2
+      val sortedTime = resFrame.rowIdx.toIndexedSeq.sorted
+      val sortedAsset = resFrame.colIdx.toIndexedSeq.sorted
+      resFrame = resFrame.loc(sortedTime, sortedAsset)
+      resFrame = resFrame.withIdx(DataIndexVector(sortedTime), DataIndexVector(sortedAsset))
+      resFrame = resFrame.copy
+      (e._1, resFrame)
+    })
   }
 
   def loadStockList(
@@ -169,7 +193,7 @@ object data {
   ): DataFrame[LocalDate, String, Double] = {
     val params = Map("ids" -> ids, "min_date"-> minDate.toString, "max_date"-> maxDate.toString)
     val resBytes = net.httpRequestWithRetry(toUrl("/idx/data"), params)
-    var resFrame = netcdf.netcdf2DToFrames(resBytes)
+    var resFrame = netcdf.netcdf2DToDailyFrames(resBytes)
 
     val sortedTime = resFrame.rowIdx.toIndexedSeq.sorted
     val sortedAsset = resFrame.colIdx.toIndexedSeq.sorted
@@ -367,10 +391,10 @@ object data {
       "max_date" -> maxDate.toString
     )
     val dataBytes = net.httpRequestWithRetry(toUrl(uri), params)
-    netcdf.netcdf3DToFrames(dataBytes)
+    netcdf.netcdf3DToDailyFrames(dataBytes)
   }
 
-  def writeOutput(df: DataFrame[LocalDate, String, Double]):Unit = {
+  def writeOutput[T<:Temporal:Ordering:ClassTag](df: DataFrame[T, String, Double]):Unit = {
     val colIdx = DataIndexVector(df.colIdx.map(getServerId))
     val dfServerIds = df.withIdx(df.rowIdx, colIdx)
     val normalized = normalizeOutput(dfServerIds)
@@ -452,6 +476,11 @@ object data {
   : String = if(clientToServerIdMapping.contains(clientId)) clientToServerIdMapping(clientId) else clientId
 
   implicit private val localDateOrdering: Ordering[LocalDate] = Ordering.by(_.toEpochDay)
-
+  implicit private val localDateTimeOrdering: Ordering[LocalDateTime] = Ordering.by(_.toEpochSecond(ZoneOffset.UTC))
+  implicit private val temporalOrdering: Ordering[Temporal] = Ordering.by(_ match {
+      case t:LocalDate => t.toEpochDay
+      case t:LocalDateTime => t.toEpochSecond(ZoneOffset.UTC)
+      case _ => ???
+    })
 }
 
